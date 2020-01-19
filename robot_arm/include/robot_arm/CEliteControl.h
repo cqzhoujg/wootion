@@ -35,6 +35,7 @@
 #include "wootion_msgs/ControlService.h"
 #include "wootion_msgs/GeneralTopic.h"
 #include "CFileRW.h"
+#include "CArmExtraCtrl.h"
 
 using namespace std;
 
@@ -112,14 +113,14 @@ typedef enum _tagRotateType
 /*name      max        min   度(°)
 
 1	177.0	-177.0
-2	-2.0	-178
-3	155.0	-155.0
-4	50	-260.0
-5	357	3.0
+2	177.0	-177
+3	160.0	-160.0
+4	80.0	-260.0
+5	357.0	 3.0
 6	177.0	-177.0*/
 const static double AxisLimitAngle[12] = {
-    175.0, -0.0,  153.0,   48.0, 355.0,  175.0,
-   -175.0, -176, -153.0, -258.0,   5.0, -175.0
+    175.0,  175.0,  158.0,   58.0, 355.0,  175.0,
+   -175.0, -175.0, -158.0, -258.0,   5.0, -175.0
 };
 
 static vector<string> SplitString(const string &sInput, const string &sDelimiter)
@@ -176,6 +177,7 @@ public:
     bool ArmOperation(const std::string &sCommand, const std::string &sInput, std::string &sOutput);
 
 private:
+    string m_sSerialPort;
     string m_sEliteRobotIP;
     string m_sPrintLevel;
     string m_sArmTrackPath;
@@ -186,7 +188,9 @@ private:
     string m_sAbnormalTopic;
     string m_sOrbitFileName;
     string m_sTaskName;
+    string m_sResetOrbitFile;
 
+    int m_nSerialSpeed;
     int m_nElitePort;
     int m_nEliteState;
     int m_nCheckReceiver;
@@ -217,6 +221,7 @@ private:
     ros::ServiceServer m_ArmService;
 
     CFileRW m_TrackFile;
+    CArmExtraCtrl m_ExtraCtrl;
 };
 
 #endif //PROJECT_CELITECONTROL_H

@@ -11,11 +11,14 @@ CEliteControl::CEliteControl():
     m_nDragStatus(DISABLE),
     m_nEliteState(ALARM),
     m_sOrbitFileName("arm_orbit.txt"),
-    m_sTaskName("idle")
+    m_sTaskName("idle"),
+    m_sResetOrbitFile("null")
 {
     ros::NodeHandle PublicNodeHandle;
     ros::NodeHandle PrivateNodeHandle("~");
 
+    PrivateNodeHandle.param("serial_port", m_sSerialPort, std::string("/dev/ttyS0"));
+    PrivateNodeHandle.param("serial_speed", m_nSerialSpeed, 2400);
     PrivateNodeHandle.param("elite_ip", m_sEliteRobotIP, std::string("192.168.100.200"));
     PrivateNodeHandle.param("elite_port", m_nElitePort, 8055);
     PrivateNodeHandle.param("elt_speed", m_dEltSpeed, 10.0);
@@ -27,6 +30,8 @@ CEliteControl::CEliteControl():
     PublicNodeHandle.param("arm_heart", m_sHeartBeatTopic, std::string("arm_heart_beat"));
     PublicNodeHandle.param("arm_abnormal", m_sAbnormalTopic, std::string("arm_exception"));
 
+    ROS_INFO("[ros param] serial_port:%s", m_sSerialPort.c_str());
+    ROS_INFO("[ros param] serial_speed:%d", m_nSerialSpeed);
     ROS_INFO("[ros param] elite_ip:%s", m_sEliteRobotIP.c_str());
     ROS_INFO("[ros param] elite_port:%d",m_nElitePort);
     ROS_INFO("[ros param] elt_speed:%f",m_dEltSpeed);
@@ -183,6 +188,12 @@ bool CEliteControl::Init()
         return false;
     }
 
+    if(!m_ExtraCtrl.Init(m_sSerialPort, m_nSerialSpeed))
+    {
+        ROS_ERROR("[Init] ExtraCtrl init error");
+        return false;
+    }
+
     return true;
 }
 
@@ -228,7 +239,7 @@ Others: void
 void CEliteControl::UpdateEliteThreadFunc()
 {
     ROS_INFO("[UpdateEliteThreadFunc] start");
-    int ret, nTimes = 0, nEliteState = 0;
+    int ret, nTimes = 0;
     elt_error err;
     elt_robot_pos EliteCurrentPos;
     memset(EliteCurrentPos, 0, sizeof(EliteCurrentPos));
@@ -278,12 +289,13 @@ void CEliteControl::UpdateEliteThreadFunc()
                 }
             }
 
-            //只有当角度差大于0.01时才将位置信息写入轨迹录制文件，剔除重复数据
+            //只有当角度差大于0.01时才将位置信息写入轨迹录制文件，剔除重复数据，剔除超限位数据
             string sAxisData;
             bool bIsWrite = false;
             for(int i=0; i<AXIS_COUNT; i++)
             {
-                if(abs(m_EliteCurrentPos[i] - EliteCurrentPos[i]) > 0.1)
+                if((abs(m_EliteCurrentPos[i] - EliteCurrentPos[i]) > 0.1) &&\
+                    m_EliteCurrentPos[i] <= AxisLimitAngle[i] && m_EliteCurrentPos[i] >= AxisLimitAngle[i+6])
                 {
                     bIsWrite = true;
                 }
@@ -875,7 +887,21 @@ Others: void
 bool CEliteControl::EliteGotoOrigin(const string &sInput, string &sOutput)
 {
     ROS_INFO("[EliteGotoOrigin] start.");
-    if(sInput.empty())
+    int nOrigin = 0;
+    for(int i=0; i<6; i++)
+    {
+        if(abs(m_EliteCurrentPos[i] - m_EltOriginPos[i]) < 0.1)
+        {
+            nOrigin++;
+        }
+    }
+    if(nOrigin == 6)
+    {
+        ROS_INFO("[EliteGotoOrigin] robot arm is already at origin.");
+        return true;
+    }
+
+    if(sInput.empty() || sInput == "null")
     {
         if(EliteMultiPointMove(m_EltOriginPos, sOutput) == -1)
         {
@@ -1229,6 +1255,10 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
+        if(vCmdList.size() == 2)
+        {
+            m_sResetOrbitFile = sTrackFile;
+        }
     }
     else if(sCommand == "rotate")
     {
@@ -1465,8 +1495,45 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             ROS_INFO("[ArmOperation] disable drag and close the orbit file");
         }
 
-        if(!EliteGotoOrigin(sInput, sOutput))
+        if(!EliteGotoOrigin(m_sResetOrbitFile, sOutput))
         {
+            return false;
+        }
+        m_sResetOrbitFile = "null";
+    }
+    else if (sCommand == "brush_on")
+    {
+        if(! m_ExtraCtrl.ExecuteTask(BURSH_ON))
+        {
+            sOutput = "brush on failed";
+            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            return false;
+        }
+    }
+    else if (sCommand == "brush_off")
+    {
+        if(! m_ExtraCtrl.ExecuteTask(BURSH_OFF))
+        {
+            sOutput = "brush off failed";
+            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            return false;
+        }
+    }
+    else if (sCommand == "light_on")
+    {
+        if(! m_ExtraCtrl.ExecuteTask(LIGHT_ON))
+        {
+            sOutput = "light on failed";
+            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            return false;
+        }
+    }
+    else if (sCommand == "light_off")
+    {
+        if(! m_ExtraCtrl.ExecuteTask(LIGHT_OFF))
+        {
+            sOutput = "light off failed";
+            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
     }
