@@ -41,7 +41,7 @@ CEliteControl::CEliteControl():
     ROS_INFO("[ros param] arm_cmd:%s", m_sArmCmdTopic.c_str());
     ROS_INFO("[ros param] arm_ack:%s", m_sArmAckTopic.c_str());
     ROS_INFO("[ros param] arm_heart:%s", m_sHeartBeatTopic.c_str());
-    ROS_INFO("[ros param] arm_heart:%s", m_sHeartBeatTopic.c_str());
+    ROS_INFO("[ros param] arm_abnormal:%s", m_sAbnormalTopic.c_str());
 
     if(!Init())
     {
@@ -292,7 +292,7 @@ void CEliteControl::UpdateEliteThreadFunc()
             //只有当角度差大于0.01时才将位置信息写入轨迹录制文件，剔除重复数据，剔除超限位数据
             string sAxisData;
             bool bIsWrite = false;
-            for(int i=0; i<AXIS_COUNT; i++)
+            for(int i=0; i<ROBOT_POSE_SIZE; i++)
             {
                 if((abs(m_EliteCurrentPos[i] - EliteCurrentPos[i]) > 0.1) &&\
                     m_EliteCurrentPos[i] <= AxisLimitAngle[i] && m_EliteCurrentPos[i] >= AxisLimitAngle[i+6])
@@ -301,7 +301,7 @@ void CEliteControl::UpdateEliteThreadFunc()
                 }
 
                 sAxisData.append(to_string(m_EliteCurrentPos[i]));
-                if(i != AXIS_COUNT - 1)
+                if(i != ROBOT_POSE_SIZE - 1)
                 {
                     sAxisData.append(" ");
                 }
@@ -496,9 +496,9 @@ int CEliteControl::UpdateEltOrigin()
     {
         EltPos targetPos;
         memset(&targetPos, 0, sizeof(targetPos));
-        for (int j = 0; j< AXIS_COUNT; j++)
+        for(int i=0; i<ROBOT_POSE_SIZE; i++)
         {
-            originFile >> m_EltOriginPos[j];
+            originFile >> m_EltOriginPos[i];
         }
     }
     PrintJointData(m_EltOriginPos, "UpdateEltOrigin");
@@ -827,9 +827,9 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
     {
         EltPos targetPos;
         memset(&targetPos, 0, sizeof(targetPos));
-        for (int j = 0; j< AXIS_COUNT; j++)
+        for(int i=0; i< ROBOT_POSE_SIZE; i++)
         {
-            trackFile >> targetPos.eltPos[j];
+            trackFile >> targetPos.eltPos[i];
         }
         trackDeque.push_back(targetPos);
     }
@@ -1533,6 +1533,33 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         if(! m_ExtraCtrl.ExecuteTask(LIGHT_OFF))
         {
             sOutput = "light off failed";
+            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            return false;
+        }
+    }
+    //测试代码，运动到固定点
+    else if (sCommand == "goto")
+    {
+        vector<string> vCmdList = SplitString(sInput, ",");
+
+        if (vCmdList.size() < 6)
+        {
+            sOutput = "input error" + sInput;
+            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            return false;
+        }
+
+        elt_robot_pos targetPos;
+        elt_error err;
+        memset(targetPos, 0, sizeof(targetPos));
+
+        for(int i=0; i<ROBOT_POSE_SIZE; i++)
+        {
+            targetPos[i] = stod(vCmdList[i]);
+        }
+
+        if(EliteMultiPointMove(targetPos, sOutput) == -1)
+        {
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
