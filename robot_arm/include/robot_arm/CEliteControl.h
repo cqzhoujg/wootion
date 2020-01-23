@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <math.h>
 #include <fstream>
+#include <unistd.h>
 #include <sensor_msgs/LaserScan.h>
 #include <sensor_msgs/Imu.h>
 #include <nav_msgs/Odometry.h>
@@ -49,13 +50,23 @@ typedef enum _tagEltStatus
     DROP_LINE = 5,
 }EltStatus;
 
+typedef enum _tagArmStatus
+{
+    IDLE = 0,
+    RECORD = 1,
+    PLAY = 2,
+    RESET = 3,
+    ROTATE = 4,
+    ERROR = 5,
+}ArmStatus;
+
 const static vector<string> vsArmStatus = {
-    "stop",
-    "pause",
-    "emergency_stop",
-    "moving",
-    "alarm",
-    "drop_line",
+    "idle",
+    "record",
+    "play",
+    "reset",
+    "rotate",
+    "error",
 };
 
 typedef enum _tagDragStatus
@@ -65,11 +76,6 @@ typedef enum _tagDragStatus
     FORWARD,
     REVERSE
 }DragStatus;
-
-const static vector<string> vsDragStatus = {
-    "disable",
-    "enable",
-};
 
 typedef struct _tagEltPos
 {
@@ -118,9 +124,16 @@ typedef enum _tagRotateType
 4	80.0	-260.0
 5	357.0	 3.0
 6	177.0	-177.0*/
+
+//大
+//const static double AxisLimitAngle[12] = {
+//    175.0,  175.0,  158.0,   58.0, 355.0,  175.0,
+//   -175.0, -175.0, -158.0, -258.0,   5.0, -175.0
+//};
+
 const static double AxisLimitAngle[12] = {
-    175.0,  175.0,  158.0,   58.0, 355.0,  175.0,
-   -175.0, -175.0, -158.0, -258.0,   5.0, -175.0
+    175.0,  -4.0,  153.0,   48.0, 355.0,  175.0,
+   -175.0, -176.0, -153.0, -258.0,   5.0, -175.0
 };
 
 static vector<string> SplitString(const string &sInput, const string &sDelimiter)
@@ -165,12 +178,14 @@ public:
     int EliteJointMove(elt_robot_pos &targetPos, string &sErr);
     int EliteMultiPointMove(elt_robot_pos &targetPos, string &sErrMsg);
     int GetElitePos(elt_robot_pos &pos_array);
-    int EliteStop(string sErr="");
+    int EliteStop(string &sErr);
     int EliteDrag(int nCmd);
     int EliteRunDragTrack(const string &sFileName, double dSpeed, int nDirection, string &sErrMsg);
-    bool EliteGotoOrigin(const string &sInput, string &sOutput);
+    bool ResetToOrigin(string &sOutput);
+    bool EliteGotoOrigin(string &sOutput);
     int EliteSyncMotorStatus();
     int EliteClearAlarm();
+    bool CheckOrigin(elt_robot_pos &pos_array);
     void PrintJointData(elt_robot_pos &pos_array, string sFunName);
     bool ArmServiceFunc(wootion_msgs::ControlService::Request &Req, wootion_msgs::ControlService::Response &Resp);
     void ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &TerraceCmd);
@@ -187,17 +202,22 @@ private:
     string m_sHeartBeatTopic;
     string m_sAbnormalTopic;
     string m_sOrbitFileName;
-    string m_sTaskName;
+    string m_sResetFile;
     string m_sResetOrbitFile;
+    string m_sStatus;
 
     int m_nSerialSpeed;
     int m_nElitePort;
     int m_nEliteState;
     int m_nCheckReceiver;
     int m_nDragStatus;
+    int m_nTaskName;
 
     bool m_bRecordDragTrack;
     bool m_bBusy;
+    bool m_bIgnoreMove;
+    bool m_bIsRecordReset;
+    bool m_bWriteOrigin;
 
     double m_dEltSpeed;//百分比
 
@@ -221,7 +241,10 @@ private:
     ros::ServiceServer m_ArmService;
 
     CFileRW m_TrackFile;
+    CFileRW m_ResetFile;
     CArmExtraCtrl m_ExtraCtrl;
+
+    std::mutex m_ResetFileMutex;
 };
 
 #endif //PROJECT_CELITECONTROL_H

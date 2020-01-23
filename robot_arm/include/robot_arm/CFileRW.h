@@ -30,7 +30,7 @@ public:
    {
        CloseFile();
    }
-    int OpenFile(string &sFilePath,const string &sType)
+    int OpenFile(string &sFilePath,const int nOpenType)
     {
         if(m_bIsFileOpen)
         {
@@ -39,7 +39,7 @@ public:
         }
         std::unique_lock<std::mutex> lock(m_mFileMutex);
 
-        int nOpenType = sType.find('w') != string::npos ? O_CREAT | O_TRUNC | O_RDWR : O_RDONLY;
+//        int nOpenType = sType.find('w') != string::npos ? O_CREAT | O_TRUNC | O_RDWR : O_RDONLY;
         m_fp = open(sFilePath.c_str(), nOpenType, 0666);
 
         if(m_fp == -1)

@@ -7,12 +7,16 @@
 CEliteControl::CEliteControl():
     m_bRecordDragTrack(false),
     m_bBusy(false),
+    m_bIgnoreMove(false),
+    m_bIsRecordReset(false),
     m_nCheckReceiver(0),
     m_nDragStatus(DISABLE),
     m_nEliteState(ALARM),
+    m_nTaskName(IDLE),
     m_sOrbitFileName("arm_orbit.txt"),
-    m_sTaskName("idle"),
-    m_sResetOrbitFile("null")
+    m_sResetFile("arm_reset.txt"),
+    m_sResetOrbitFile("null"),
+    m_sStatus("idle")
 {
     ros::NodeHandle PublicNodeHandle;
     ros::NodeHandle PrivateNodeHandle("~");
@@ -51,6 +55,7 @@ CEliteControl::CEliteControl():
 
     m_tRecordDataTime.tv_sec = 0;
     m_tRecordDataTime.tv_nsec = 0;
+    m_sResetFile = m_sArmTrackPath+m_sResetFile;
 
     m_ArmService = PublicNodeHandle.advertiseService(m_sArmService, &CEliteControl::ArmServiceFunc, this);
     m_ArmCmdSubscriber = PublicNodeHandle.subscribe<wootion_msgs::GeneralCmd>(m_sArmCmdTopic, 10, boost::bind(&CEliteControl::ArmCmdCallBack, this, _1));
@@ -92,8 +97,8 @@ CEliteControl::CEliteControl():
 
     this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    string sTrackPath, sOutput;
-    if(!EliteGotoOrigin(sTrackPath, sOutput))
+    string sOutput;
+    if(!ResetToOrigin(sOutput))
     {
         ROS_ERROR("[CEliteControl] %s",sOutput.c_str());
     }
@@ -242,6 +247,15 @@ void CEliteControl::UpdateEliteThreadFunc()
     int ret, nTimes = 0;
     elt_error err;
     elt_robot_pos EliteCurrentPos;
+    std::unique_lock<std::mutex> Lock(m_ResetFileMutex);
+    if(m_ResetFile.OpenFile(m_sResetFile, O_CREAT |O_RDWR) == -1)
+    {
+        ROS_ERROR("[UpdateEliteThreadFunc] open reset file error:%s", m_sResetFile.c_str());
+        exit(-1);
+    }
+    Lock.unlock();
+    m_bWriteOrigin = true;
+
     memset(EliteCurrentPos, 0, sizeof(EliteCurrentPos));
     memset(&m_EliteCurrentPos, 0, sizeof(m_EliteCurrentPos));
 
@@ -261,39 +275,13 @@ void CEliteControl::UpdateEliteThreadFunc()
         }
 
         //每200ms记录一次轨迹文件
-        if(m_bRecordDragTrack && nTimes == 0)
+        if(nTimes == 0)
         {
-            //轨迹记录超时检测
-            if(m_tRecordDataTime.tv_sec != 0 && m_tRecordDataTime.tv_nsec != 0)
-            {
-                timespec CurrentTime;
-                timespec_get(&CurrentTime, TIME_UTC);
-
-                __time_t pollInterval = (CurrentTime.tv_sec - m_tRecordDataTime.tv_sec) \
-                                        +(CurrentTime.tv_nsec - m_tRecordDataTime.tv_nsec) / 1000000000;
-                if(pollInterval > 180)
-                {
-                    m_bRecordDragTrack = false;
-                    m_tRecordDataTime.tv_sec = 0;
-                    m_tRecordDataTime.tv_nsec = 0;
-                    ROS_INFO("[UpdateEliteThreadFunc] record track time out,pollInterval=%ld s",pollInterval);
-
-                    if(EliteDrag(DISABLE) == -1)
-                    {
-                        ROS_ERROR("[UpdateEliteThreadFunc] disable drag failed");
-                    }
-                    if(m_TrackFile.CloseFile() == -1)
-                    {
-                        ROS_ERROR("[UpdateEliteThreadFunc] close file failed");
-                    }
-                }
-            }
-
-            //只有当角度差大于0.01时才将位置信息写入轨迹录制文件，剔除重复数据，剔除超限位数据
             string sAxisData;
             bool bIsWrite = false;
             for(int i=0; i<ROBOT_POSE_SIZE; i++)
             {
+                //只有当角度差大于0.1时才将位置信息写入轨迹录制文件，剔除重复数据，剔除超限位数据
                 if((abs(m_EliteCurrentPos[i] - EliteCurrentPos[i]) > 0.1) &&\
                     m_EliteCurrentPos[i] <= AxisLimitAngle[i] && m_EliteCurrentPos[i] >= AxisLimitAngle[i+6])
                 {
@@ -306,12 +294,65 @@ void CEliteControl::UpdateEliteThreadFunc()
                     sAxisData.append(" ");
                 }
             }
-            if(bIsWrite)
+            sAxisData.append("\n");
+
+            if(CheckOrigin(EliteCurrentPos) && !CheckOrigin(m_EliteCurrentPos))
             {
-                sAxisData.append("\n");
-                m_TrackFile.Output(sAxisData);
+                m_bIsRecordReset = true;
             }
 
+            if(m_bRecordDragTrack)
+            {
+                //轨迹记录超时检测
+                if(m_tRecordDataTime.tv_sec != 0 && m_tRecordDataTime.tv_nsec != 0)
+                {
+                    timespec CurrentTime;
+                    timespec_get(&CurrentTime, TIME_UTC);
+
+                    __time_t pollInterval = (CurrentTime.tv_sec - m_tRecordDataTime.tv_sec) \
+                                        +(CurrentTime.tv_nsec - m_tRecordDataTime.tv_nsec) / 1000000000;
+                    if(pollInterval > 180)
+                    {
+                        m_bRecordDragTrack = false;
+                        m_tRecordDataTime.tv_sec = 0;
+                        m_tRecordDataTime.tv_nsec = 0;
+                        ROS_INFO("[UpdateEliteThreadFunc] record track time out,pollInterval=%ld s",pollInterval);
+
+                        if(EliteDrag(DISABLE) == -1)
+                        {
+                            ROS_ERROR("[UpdateEliteThreadFunc] disable drag failed");
+                        }
+                        if(m_TrackFile.CloseFile() == -1)
+                        {
+                            ROS_ERROR("[UpdateEliteThreadFunc] close file failed");
+                        }
+                    }
+                }
+                if(bIsWrite)
+                {
+                    m_TrackFile.Output(sAxisData);
+                }
+            }
+
+            if(m_bIsRecordReset && m_nTaskName != RESET && bIsWrite)
+            {
+                if(m_bWriteOrigin)
+                {
+                    string sOriginData;
+                    for(int i=0; i<ROBOT_POSE_SIZE; i++)
+                    {
+                        sOriginData.append(to_string(m_EltOriginPos[i]));
+                        if(i != ROBOT_POSE_SIZE - 1)
+                        {
+                            sOriginData.append(" ");
+                        }
+                    }
+                    sOriginData.append("\n");
+                    m_ResetFile.Output(sOriginData);
+                    m_bWriteOrigin = false;
+                }
+                m_ResetFile.Output(sAxisData);
+            }
             memcpy(EliteCurrentPos, m_EliteCurrentPos, sizeof(EliteCurrentPos));
         }
 
@@ -333,12 +374,13 @@ Others: void
 void CEliteControl::HeartBeatThreadFunc()
 {
     ROS_INFO("[HeartBeatThreadFunc] start");
-
+    int nTimes = 0;
     while(ros::ok())
     {
         //心跳消息
         wootion_msgs::GeneralTopic HeartBeatMsg;
         boost::property_tree::ptree ptAllItem;
+        bool bStatusChanged = false;
 
         HeartBeatMsg.header.stamp = ros::Time::now();
         HeartBeatMsg.sender = "robot_arm";
@@ -346,33 +388,64 @@ void CEliteControl::HeartBeatThreadFunc()
         HeartBeatMsg.trans_id = 1;
         HeartBeatMsg.data.clear();
 
-        ptAllItem.put("status", vsArmStatus[m_nEliteState]);
-        if(m_nEliteState == STOP)
+        //状态
+        string sStatus = "idle";
+        if(m_nEliteState == MOVING || m_nTaskName == RECORD || m_bIgnoreMove)
         {
-            ptAllItem.put("task", "idle");
+            sStatus = vsArmStatus[m_nTaskName];
+        }
+        if(m_nEliteState == ALARM || m_nEliteState == PAUSE)
+        {
+            sStatus = vsArmStatus[ERROR];
+        }
+        if(m_sStatus != sStatus)
+            bStatusChanged = true;
+
+        m_sStatus = sStatus;
+
+        ptAllItem.put("status", m_sStatus);
+
+        //错误信息
+        string sErrCode, sErrMsg;
+        if(m_nEliteState == ALARM)
+        {
+            sErrCode = "1";
+            sErrMsg = "alarm";
+        }
+        else if(m_nEliteState == PAUSE)
+        {
+            sErrCode = "2";
+            sErrMsg = "emergency_stop";
+        }
+        ptAllItem.put("error_code", sErrCode);
+        ptAllItem.put("error_msg", sErrMsg);
+
+        //是否在原点
+        string sOrigin;
+        if(CheckOrigin(m_EliteCurrentPos))
+        {
+            sOrigin = "true";
         }
         else
         {
-            ptAllItem.put("task", m_sTaskName);
+            sOrigin = "false";
         }
-        ptAllItem.put("drag", vsDragStatus[m_nDragStatus]);
-        int nOrigin = 0;
-        for(int i=0; i<6; i++)
+        ptAllItem.put("origin", sOrigin);
+
+        //是否有轨迹
+        string sOrbitFileExist;
+        if(access((m_sArmTrackPath + m_sOrbitFileName).c_str(), 0) == 0 || access(m_sResetOrbitFile.c_str(), 0) == 0)
         {
-            if(abs(m_EliteCurrentPos[i] - m_EltOriginPos[i]) < 0.1)
-            {
-                nOrigin++;
-            }
-        }
-        if(nOrigin == 6)
-        {
-            ptAllItem.put("origin", "true");
+            sOrbitFileExist = "true";
         }
         else
         {
-            ptAllItem.put("origin", "false");
+            sOrbitFileExist = "false";
         }
 
+        ptAllItem.put("exist_orbit", sOrbitFileExist);
+
+        //当前位置点
         string sCurrentData;
         for(int i=0; i<6; i++)
         {
@@ -388,7 +461,11 @@ void CEliteControl::HeartBeatThreadFunc()
         boost::property_tree::write_json(ssStream, ptAllItem);
         HeartBeatMsg.data = ssStream.str();
 
-        m_HeartBeatPublisher.publish(HeartBeatMsg);
+        if(10 == nTimes || bStatusChanged)
+        {
+            m_HeartBeatPublisher.publish(HeartBeatMsg);
+            nTimes = 0;
+        }
 
         //异常检测
         if(m_bRecordDragTrack && m_nEliteState == ALARM)
@@ -405,7 +482,8 @@ void CEliteControl::HeartBeatThreadFunc()
             m_AbnormalPublisher.publish(AbnormalMsg);
         }
 
-        this_thread::sleep_for(std::chrono::seconds(1));
+        nTimes++;
+        this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
@@ -433,7 +511,8 @@ void CEliteControl::ControlThreadFunc()
         if(c == 's')
         {
             ROS_INFO("[ControlThreadFunc] stop.");
-            EliteStop();
+            string sErr;
+            EliteStop(sErr);
         }
         if(c == 'e')
         {
@@ -522,11 +601,10 @@ int CEliteControl::EliteJointMove(elt_robot_pos &targetPos, string &sErr)
     //6轴运动限位检测，防止报警
     for(int i=0; i<6 ;i++)
     {
-        if((m_EliteCurrentPos[i] > AxisLimitAngle[i] && m_EliteCurrentPos[i] < targetPos[i])\
-                    ||  (m_EliteCurrentPos[i] < AxisLimitAngle[i+6] && m_EliteCurrentPos[i] > targetPos[i]))
+        if(targetPos[i] > AxisLimitAngle[i] || targetPos[i] < AxisLimitAngle[i+6])
         {
             sErr.append("target pos error,the ").append(to_string(i+1)).append("th axis beyond the limit");
-            ROS_ERROR("[EliteMultiPointMove] %s", sErr.c_str());
+            ROS_ERROR("[EliteJointMove] %s", sErr.c_str());
             return -1;
         }
     }
@@ -540,11 +618,11 @@ int CEliteControl::EliteJointMove(elt_robot_pos &targetPos, string &sErr)
         else
             sErr.append("elt joint move error");
 
-        ROS_ERROR("[EliteMultiPointMove] err code: %d,err message: %s", err.code, err.err_msg);
+        ROS_ERROR("[EliteJointMove] err code: %d,err message: %s", err.code, err.err_msg);
         return -1;
     }
 
-    ROS_INFO("[EliteMultiPointMove] after call joint move");
+    ROS_INFO("[EliteJointMove] after call joint move");
     return 1;
 }
 
@@ -566,8 +644,7 @@ int CEliteControl::EliteMultiPointMove(elt_robot_pos &targetPos, string &sErrMsg
     //6轴运动限位检测，防止报警
     for(int i=0; i<6 ;i++)
     {
-        if((m_EliteCurrentPos[i] > AxisLimitAngle[i] && m_EliteCurrentPos[i] < targetPos[i])\
-                    ||  (m_EliteCurrentPos[i] < AxisLimitAngle[i+6] && m_EliteCurrentPos[i] > targetPos[i]))
+        if(targetPos[i] > AxisLimitAngle[i] || targetPos[i] < AxisLimitAngle[i+6])
         {
             sErrMsg.append("target pos error,the ").append(to_string(i+1)).append("th axis beyond the limit");
             ROS_ERROR("[EliteMultiPointMove] %s", sErrMsg.c_str());
@@ -688,10 +765,34 @@ Output:  1, 成功
         -1, 失败
 Others: void
 **************************************************/
-int CEliteControl::EliteStop(string sErr)
+int CEliteControl::EliteStop(string &sErr)
 {
     int ret;
     elt_error err;
+
+    if(m_nEliteState == PAUSE)
+    {
+        //清除轨迹点集
+        ret = elt_clear_waypoint( m_eltCtx, &err);
+        if (ret != ELT_SUCCESS)
+        {
+            sErr = "clear way point failed";
+            ROS_ERROR("[EliteStop] %s,err code: %d,err message: %s",sErr.c_str(), err.code, err.err_msg);
+            return -1;
+        }
+        ret = elt_run(m_eltCtx, &err);
+        if (ELT_SUCCESS != ret)
+        {
+            if(err.err_msg[0] != '\0')
+                sErr.append(err.err_msg);
+            else
+                sErr.append("elt run error");
+
+            ROS_INFO("[EliteStop] elt run failed, err code: %d,err message: %s", err.code, err.err_msg);
+            return -1;
+        }
+    }
+
     ret = elt_stop(m_eltCtx, &err);
     if (ELT_SUCCESS != ret)
     {
@@ -833,8 +934,15 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
         }
         trackDeque.push_back(targetPos);
     }
-    trackDeque.pop_back();
     trackFile.close();
+    trackDeque.pop_back();
+
+    if(trackDeque.size() <= 1)
+    {
+        sErrMsg = "the content of orbit file is null";
+        ROS_INFO("[EliteRunDragTrack] %s,",sErrMsg.c_str());
+        return -1;
+    }
 
     //根据方向，调用elt库函数，将队列中的点添加的elt运动轨迹点当中
     while(!trackDeque.empty())
@@ -876,6 +984,62 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
 }
 
 /*************************************************
+Function: CEliteControl::ResetToOrigin
+Description: 有报警则清除报警后，返回原点位置
+Input: string &sOutput,反馈信息
+Output: true,成功
+        false,失败
+Others: void
+**************************************************/
+bool CEliteControl::ResetToOrigin(string &sOutput)
+{
+    ROS_INFO("[ResetToOrigin] start.");
+    if(m_nEliteState == ALARM)
+    {
+        elt_error err;
+        int nRet = elt_clear_alarm(m_eltCtx, 1, &err);
+
+        if (ELT_SUCCESS != nRet)
+        {
+            if(err.err_msg[0] != '\0')
+                sOutput.append(err.err_msg);
+            else
+                sOutput.append("elt clear alarm error");
+
+            ROS_ERROR("[ResetToOrigin] clear alarm failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
+            return false;
+        }
+    }
+
+    if(m_bRecordDragTrack)
+    {
+        if(EliteDrag(DISABLE) == -1)
+        {
+            sOutput = "disable drag failed";
+            ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
+            return false;
+        }
+        if(m_TrackFile.CloseFile() == -1)
+        {
+            sOutput = "close file failed";
+            ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
+            return false;
+        }
+        ROS_INFO("[ResetToOrigin] disable drag and close the orbit file");
+    }
+
+    if(!EliteGotoOrigin(sOutput))
+    {
+        ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
+        return false;
+    }
+    m_nTaskName = RESET;
+
+    this_thread::sleep_for(std::chrono::milliseconds(1000));
+    return true;
+}
+
+/*************************************************
 Function: CEliteControl::EliteGotoOrigin
 Description: 返回原点位置
 Input: string &sInput,轨迹全路径+文件文件名 可为空
@@ -884,39 +1048,48 @@ Output: true,成功
         false,失败
 Others: void
 **************************************************/
-bool CEliteControl::EliteGotoOrigin(const string &sInput, string &sOutput)
+bool CEliteControl::EliteGotoOrigin(string &sOutput)
 {
     ROS_INFO("[EliteGotoOrigin] start.");
-    int nOrigin = 0;
-    for(int i=0; i<6; i++)
-    {
-        if(abs(m_EliteCurrentPos[i] - m_EltOriginPos[i]) < 0.1)
-        {
-            nOrigin++;
-        }
-    }
-    if(nOrigin == 6)
+
+    if(CheckOrigin(m_EliteCurrentPos))
     {
         ROS_INFO("[EliteGotoOrigin] robot arm is already at origin.");
         return true;
     }
+    m_bIsRecordReset = false;
 
-    if(sInput.empty() || sInput == "null")
+    std::unique_lock<std::mutex> Lock(m_ResetFileMutex);
+    if(EliteRunDragTrack(m_sResetFile, m_dEltSpeed, REVERSE, sOutput) == -1)
     {
-        if(EliteMultiPointMove(m_EltOriginPos, sOutput) == -1)
+        if(sOutput == "the content of orbit file is null")
+        {
+            if(EliteMultiPointMove(m_EltOriginPos, sOutput) == -1)
+            {
+                ROS_ERROR("[EliteGotoOrigin]%s",sOutput.c_str());
+                return false;
+            }
+        }
+        else
         {
             ROS_ERROR("[EliteGotoOrigin]%s",sOutput.c_str());
             return false;
         }
+
     }
-    else
+    if(m_ResetFile.CloseFile() == -1)
     {
-        if(EliteRunDragTrack(sInput, 40, REVERSE, sOutput) == -1)
-        {
-            ROS_ERROR("[EliteGotoOrigin]%s",sOutput.c_str());
-            return false;
-        }
+        ROS_ERROR("[EliteGotoOrigin] close reset file error:%s", m_sResetFile.c_str());
+        exit(-1);
     }
+    if(m_ResetFile.OpenFile(m_sResetFile, O_CREAT | O_TRUNC | O_RDWR) == -1)
+    {
+        ROS_ERROR("[EliteGotoOrigin] open reset file error:%s", m_sResetFile.c_str());
+        exit(-1);
+    }
+    Lock.unlock();
+    m_bWriteOrigin = true;
+
     return true;
 }
 
@@ -1018,6 +1191,27 @@ int CEliteControl::EliteClearAlarm()
 }
 
 /*************************************************
+Function: CEliteControl::CheckOrigin
+Description: 检测位置信息是否为原点位置
+Input: elt_robot_pos &pos_array, 位置信息数组
+Output: true or false
+Others: void
+**************************************************/
+bool CEliteControl::CheckOrigin(elt_robot_pos &pos_array)
+{
+    int nOrigin = 0;
+    for(int i=0; i<6; i++)
+    {
+        if(abs(pos_array[i] - m_EltOriginPos[i]) < 0.1)
+        {
+            nOrigin++;
+        }
+    }
+
+    return (nOrigin == 6);
+}
+
+/*************************************************
 Function: CEliteControl::PrintJointData
 Description: 打印关节角度信息
 Input: elt_robot_pos &pos_array, 位置信息数组
@@ -1057,7 +1251,8 @@ bool CEliteControl::ArmServiceFunc(wootion_msgs::ControlService::Request &Req, w
 
     ROS_INFO("[ArmServiceFunc] request:%s, data:%s", Req.cmd.c_str(), Req.data.c_str());
 
-    if ((m_nEliteState == EMERGENCY_STOP || m_nEliteState == ALARM) && Req.cmd != "reset")
+    if ((m_nEliteState == EMERGENCY_STOP || m_nEliteState == ALARM) &&
+        Req.cmd != "reset" && Req.cmd != "record_orbit" && Req.cmd != "play_orbit")
     {
         ROS_ERROR("[ArmServiceFunc] work status abnormal");
         Resp.data = "work status abnormal";
@@ -1084,6 +1279,15 @@ bool CEliteControl::ArmServiceFunc(wootion_msgs::ControlService::Request &Req, w
     {
         ROS_INFO("[ArmServiceFunc] robot arm is moving");
         Resp.data = "robot arm is moving";
+        return true;
+    }
+
+    if (m_bRecordDragTrack && m_nEliteState != ALARM &&\
+            (Req.cmd == "record_orbit" || Req.cmd == "play_orbit" || Req.cmd == "rotate" ||\
+             Req.cmd == "set_orientation" || Req.cmd == "set_position" || Req.cmd == "reset"))
+    {
+        ROS_INFO("[ArmServiceFunc] robot arm is dragging");
+        Resp.data = "robot arm is dragging";
         return true;
     }
 
@@ -1122,7 +1326,8 @@ void CEliteControl::ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &Arm
     ArmAck.ack = "failed";
     ArmAck.data.clear();
 
-    if ((m_nEliteState == EMERGENCY_STOP || m_nEliteState == ALARM) && ArmCmd->cmd != "reset")
+    if ((m_nEliteState == EMERGENCY_STOP || m_nEliteState == ALARM) && \
+        ArmCmd->cmd != "reset" && ArmCmd->cmd != "record_orbit" && ArmCmd->cmd != "play_orbit")
     {
         ROS_ERROR("[ArmCmdCallBack] work status abnormal");
         ArmAck.data = "work status abnormal";
@@ -1155,6 +1360,17 @@ void CEliteControl::ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &Arm
         m_ArmAckPublisher.publish(ArmAck);
         return;
     }
+
+    if (m_bRecordDragTrack && m_nEliteState != ALARM &&\
+            (ArmCmd->cmd == "record_orbit" || ArmCmd->cmd == "play_orbit" || ArmCmd->cmd == "rotate" ||\
+             ArmCmd->cmd == "set_orientation" || ArmCmd->cmd == "set_position" || ArmCmd->cmd == "reset"))
+    {
+        ROS_INFO("[ArmCmdCallBack] robot arm is moving");
+        ArmAck.data = "robot arm is moving";
+        m_ArmAckPublisher.publish(ArmAck);
+        return;
+    }
+
     m_bBusy = true;
 
     ArmAck.ack = ArmOperation(ArmCmd->cmd, ArmCmd->data, ArmAck.data) ? "success" : "failed";
@@ -1179,7 +1395,6 @@ Others: void
 bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string &sInput, std::string &sOutput)
 {
     ROS_INFO("[ArmOperation] command:%s, input data:%s", sCommand.c_str(), sInput.c_str());
-    m_sTaskName = sCommand.c_str();
     sOutput = "";
 
     if(m_bRecordDragTrack && sCommand != "record_orbit" && sCommand != "stop_orbit" && sCommand != "reset")
@@ -1190,10 +1405,48 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
 
     if(sCommand == "record_orbit")
     {
-        string sTrackFile = m_sArmTrackPath + m_sOrbitFileName;
+        m_bIgnoreMove = true;
+        if(!ResetToOrigin(sOutput))
+        {
+            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            return false;
+        }
 
+        timespec m_tStartTime;
+        timespec_get(&m_tStartTime, TIME_UTC);
+
+        bool bRan = false;
+        while(m_nEliteState != STOP)
+        {
+            //机械臂执行拖拽轨迹超时检测
+            this_thread::sleep_for(std::chrono::milliseconds(1000));
+            bRan = true;
+
+            timespec CurrentTime;
+            timespec_get(&CurrentTime, TIME_UTC);
+
+            __time_t pollInterval = (CurrentTime.tv_sec - m_tStartTime.tv_sec) \
+                                    +(CurrentTime.tv_nsec - m_tStartTime.tv_nsec) / 1000000000;
+            if(pollInterval > 120)
+            {
+                sOutput = "record orbit reset timeout error";
+                ROS_WARN("[ArmOperation] %s", sOutput.c_str());
+                return false;
+            }
+        }
+        if(bRan)
+        {
+            this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+
+        string sTrackFile = m_sArmTrackPath + m_sOrbitFileName;
         ROS_INFO("[ArmOperation] the orbit file is:%s",sTrackFile.c_str());
-        if(m_TrackFile.OpenFile(sTrackFile,"w") == -1)
+
+        if(m_TrackFile.CloseFile() == -1)
+        {
+            ROS_ERROR("[ArmOperation] close orbit file failed");
+        }
+        if(m_TrackFile.OpenFile(sTrackFile, O_CREAT | O_TRUNC | O_RDWR) == -1)
         {
             sOutput = "open file failed";
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1205,8 +1458,10 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
-
+        m_sResetOrbitFile = sTrackFile;
         sOutput = sTrackFile;
+        m_nTaskName = RECORD;
+        m_bIgnoreMove = false;
     }
     else if(sCommand == "stop_orbit")
     {
@@ -1222,26 +1477,58 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
+        m_nTaskName = IDLE;
         ROS_INFO("[ArmOperation] disable drag and close the orbit file");
     }
     else if(sCommand == "play_orbit")
     {
-        string sTrackFile, sDirection;
-        int nDirection;
+        m_bIgnoreMove = true;
+        if(!ResetToOrigin(sOutput))
+        {
+            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            return false;
+        }
 
+        timespec m_tStartTime;
+        timespec_get(&m_tStartTime, TIME_UTC);
+        int bRan = false;
+        while(m_nEliteState != STOP)
+        {
+            //机械臂执行拖拽轨迹超时检测
+            this_thread::sleep_for(std::chrono::milliseconds(1000));
+            bRan = true;
+
+            timespec CurrentTime;
+            timespec_get(&CurrentTime, TIME_UTC);
+
+            __time_t pollInterval = (CurrentTime.tv_sec - m_tStartTime.tv_sec) \
+                                    +(CurrentTime.tv_nsec - m_tStartTime.tv_nsec) / 1000000000;
+            if(pollInterval > 120)
+            {
+                sOutput = "play orbit reset timeout error";
+                ROS_WARN("[ArmOperation] %s", sOutput.c_str());
+                return false;
+            }
+        }
+
+        m_nTaskName = PLAY;
+        if(bRan)
+        {
+            this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+
+        string sTrackFile, sDirection;
         vector<string> vCmdList = SplitString(sInput, ",");
 
         if(vCmdList.size() == 1)
         {
             sDirection = vCmdList[0];
-            nDirection = (sDirection == "+") ? FORWARD : REVERSE;
             sTrackFile = m_sArmTrackPath + m_sOrbitFileName;
         }
         else if(vCmdList.size() == 2)
         {
             sTrackFile = vCmdList[0];
             sDirection = vCmdList[1];
-            nDirection = (sDirection == "+") ? FORWARD : REVERSE;
         }
         else
         {
@@ -1250,15 +1537,24 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             return false;
         }
 
-        if(EliteRunDragTrack(sTrackFile, 40, nDirection, sOutput) == -1)
+        if(sDirection == "+")
         {
-            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
-            return false;
+            if (access(sTrackFile.c_str(), 0))
+            {
+                sOutput = "orbit file is null";
+                ROS_ERROR("[ArmOperation]%s", sOutput.c_str());
+                return false;
+            }
+
+            if (EliteRunDragTrack(sTrackFile, m_dEltSpeed, FORWARD, sOutput) == -1)
+            {
+                ROS_ERROR("[ArmOperation]%s", sOutput.c_str());
+                return false;
+            }
         }
-        if(vCmdList.size() == 2)
-        {
-            m_sResetOrbitFile = sTrackFile;
-        }
+
+        m_sResetOrbitFile = sTrackFile;
+        m_bIgnoreMove = false;
     }
     else if(sCommand == "rotate")
     {
@@ -1344,6 +1640,8 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
                 return false;
             }
         }
+
+        m_nTaskName = ROTATE;
     }
     else if(sCommand == "stop_rotate")
     {
@@ -1362,10 +1660,6 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
     }
     else if(sCommand == "set_orientation")
     {
-        std::string sYawAngle;
-        std::string sPitchAngle;
-        std::string sRollAngle;
-
         vector<string> vCmdList = SplitString(sInput, ",");
 
         if (vCmdList.size() < 3)
@@ -1375,16 +1669,12 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             return false;
         }
 
-        sRollAngle = vCmdList[0];
-        sPitchAngle = vCmdList[1];
-        sYawAngle = vCmdList[2];
-
         elt_robot_pos targetPos;
         memcpy(targetPos, m_EliteCurrentPos, sizeof(targetPos));
 
-        targetPos[AXIS_ROLL] = strtod(sRollAngle.c_str(), nullptr);
-        targetPos[AXIS_PITCH] = strtod(sPitchAngle.c_str(), nullptr);
-        targetPos[AXIS_YAW] = strtod(sYawAngle.c_str(), nullptr);
+        targetPos[AXIS_ROLL] = stod(vCmdList[0]);
+        targetPos[AXIS_PITCH] = stod(vCmdList[1]);
+        targetPos[AXIS_YAW] = stod(vCmdList[2]);
 
         if(EliteMultiPointMove(targetPos, sOutput) == -1)
         {
@@ -1392,6 +1682,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
+        m_nTaskName = ROTATE;
     }
     else if(sCommand == "move")
     {
@@ -1445,7 +1736,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
 
         elt_robot_pos targetPos;
         elt_error err;
-        if(elt_inverse_kinematic(m_eltCtx, targetPos, ElitePose, &err) == -1)
+        if(elt_inverse_kinematic(m_eltCtx, ElitePose, targetPos, &err) == -1)
         {
             sOutput = "set position error:";
             sOutput.append(err.err_msg);
@@ -1458,48 +1749,51 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
+
+        m_nTaskName = ROTATE;
     }
     else if(sCommand == "reset")
     {
-        if(m_nEliteState == ALARM)
+        m_nTaskName = RESET;
+        m_bIgnoreMove = true;
+
+        if(m_nEliteState == PAUSE)
         {
-            elt_error err;
-            int nRet = elt_clear_alarm(m_eltCtx, 1, &err);
-
-            if (ELT_SUCCESS != nRet)
+            if(!EliteStop(sOutput))
             {
-                if(err.err_msg[0] != '\0')
-                    sOutput.append(err.err_msg);
-                else
-                    sOutput.append("elt clear alarm error");
-
-                ROS_ERROR("[ArmOperation] clear alarm failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
-                return false;
-            }
-        }
-
-        if(m_bRecordDragTrack)
-        {
-            if(EliteDrag(DISABLE) == -1)
-            {
-                sOutput = "disable drag failed";
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
                 return false;
             }
-            if(m_TrackFile.CloseFile() == -1)
+
+            timespec m_tStartTime;
+            timespec_get(&m_tStartTime, TIME_UTC);
+
+            while(m_nEliteState != STOP)
             {
-                sOutput = "close file failed";
-                ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
-                return false;
+                //机械臂执行拖拽轨迹超时检测
+                this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+                timespec CurrentTime;
+                timespec_get(&CurrentTime, TIME_UTC);
+
+                __time_t pollInterval = (CurrentTime.tv_sec - m_tStartTime.tv_sec) \
+                                    +(CurrentTime.tv_nsec - m_tStartTime.tv_nsec) / 1000000000;
+                if(pollInterval > 20)
+                {
+                    sOutput = "reset collision alarm timeout error";
+                    ROS_WARN("[ArmOperation] %s", sOutput.c_str());
+                    return false;
+                }
             }
-            ROS_INFO("[ArmOperation] disable drag and close the orbit file");
         }
 
-        if(!EliteGotoOrigin(m_sResetOrbitFile, sOutput))
+        if(!ResetToOrigin(sOutput))
         {
+            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
         m_sResetOrbitFile = "null";
+        m_bIgnoreMove = false;
     }
     else if (sCommand == "brush_on")
     {
@@ -1542,7 +1836,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
     {
         vector<string> vCmdList = SplitString(sInput, ",");
 
-        if (vCmdList.size() < 6)
+        if (vCmdList.size() < 7)
         {
             sOutput = "input error" + sInput;
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1550,12 +1844,33 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         }
 
         elt_robot_pos targetPos;
-        elt_error err;
-        memset(targetPos, 0, sizeof(targetPos));
-
-        for(int i=0; i<ROBOT_POSE_SIZE; i++)
+        if(vCmdList[6] == "pose")
         {
-            targetPos[i] = stod(vCmdList[i]);
+            elt_robot_pose ElitePose;
+            memset(ElitePose, 0, sizeof(ElitePose));
+            elt_error err;
+
+            for(int i=0; i<ROBOT_POSE_SIZE; i++)
+            {
+                if(i<3)
+                    ElitePose[i] = stod(vCmdList[i]);
+                else
+                    ElitePose[i] = stod(vCmdList[i])/180*M_PI;
+            }
+            if(elt_inverse_kinematic(m_eltCtx, ElitePose, targetPos, &err) == -1)
+            {
+                sOutput = "set position error:";
+                sOutput.append(err.err_msg);
+                ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+                return false;
+            }
+        }
+        else
+        {
+            for(int i=0; i<ROBOT_POSE_SIZE; i++)
+            {
+                targetPos[i] = stod(vCmdList[i]);
+            }
         }
 
         if(EliteMultiPointMove(targetPos, sOutput) == -1)
