@@ -1,0 +1,19 @@
+#define goal
+Header      header
+string      sender
+string      receiver
+string      action_id
+string      type
+string      data
+---
+#define result
+string      action_id
+string      ret_code
+string      ret_msg
+string      data
+---
+#define feedback
+string      action_id
+string      event_code
+string      event_msg
+string      data

@@ -1,0 +1,17 @@
+Header      header
+string      sender
+string      receiver
+uint32      trans_id
+uint8       mode
+uint8       wheel_status
+uint8       light_status
+uint8       stop_status
+uint8       circuit_status
+uint32[]    other_status
+int32       battery_voltage
+int32       battery_current
+int32       battery_quantity
+uint32      battery_status
+uint8[]     motor_status
+uint32[]    motor_info
+int32[]     temperature

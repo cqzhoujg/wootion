@@ -1,0 +1,11 @@
+Header      header
+string      sender
+string      receiver
+string      robot_ip
+uint32      trans_id
+uint32      control_mode
+uint32      cmd_mode
+float64     velocity_x
+float64     velocity_yaw
+float64[]   position
+float64     orientation

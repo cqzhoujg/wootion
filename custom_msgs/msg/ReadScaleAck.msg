@@ -1,0 +1,9 @@
+Header      header
+string      sender
+string      receiver
+string      robot_ip
+uint32      trans_id
+string      result
+float64[]   scale
+float64[]   posibility
+string      picture_path

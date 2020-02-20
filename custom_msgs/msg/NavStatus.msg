@@ -1,0 +1,10 @@
+Header      header
+string      sender
+string      receiver
+string      robot_ip
+uint32      trans_id
+uint8       robot_run_mode
+uint8       goal_reached_status
+uint8       obstacle_status
+uint8       nav_charge_status
+uint8       path_status

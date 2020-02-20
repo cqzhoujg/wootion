@@ -1,0 +1,10 @@
+Header      header
+string      sender
+string      receiver
+uint32      trans_id
+string      directory
+int32       foreign_detect
+string[]    filename
+string[]    foreign_filename
+int32[]     roi_vertex
+int32[]     roi_vertex_thermal

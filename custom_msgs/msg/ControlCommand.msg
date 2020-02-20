@@ -1,0 +1,10 @@
+Header      header
+string      sender
+string      receiver
+string      robot_ip
+uint32      trans_id
+float64     velocity_x
+float64     velocity_yaw
+uint8       wheel_control
+uint8       light_control
+uint8       disable_control

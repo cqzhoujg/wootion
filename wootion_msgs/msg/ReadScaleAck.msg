@@ -1,0 +1,12 @@
+Header      header
+string      sender
+string      receiver
+uint32      trans_id
+string      result
+string      foreign_result
+float64[]   scale
+float64[]   foreign_scale
+float64[]   posibility
+float64[]   foreign_posibility
+string[]    picture_path
+string[]    foreign_picture_path

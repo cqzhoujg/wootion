@@ -1,0 +1,14 @@
+Header      header
+string      sender
+string      receiver
+uint32      trans_id
+string      type
+string      data
+---
+string      event_code
+string      event_msg
+string      data
+---
+string      ret_code
+string      ret_msg
+string      data

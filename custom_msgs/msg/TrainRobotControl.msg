@@ -1,0 +1,12 @@
+Header      header
+string      sender
+string      receiver
+string      robot_ip
+uint32      trans_id
+string       cmd
+uint32       back
+float64     speed
+float64     distance
+float64     limit_dis
+uint32      expected_mileage
+uint32      actual_mileage
