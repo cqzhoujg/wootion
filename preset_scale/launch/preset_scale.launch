@@ -1,0 +1,19 @@
+<launch>
+    <node pkg="preset_scale" type="preset_scale" name="preset_scale" respawn="true">
+        <param name="node_name" value="preset_scale"/>
+        <param name="preset_path" value="preset"/>
+        <param name="preset_file" value="preset.ini"/>
+        <param name="preset_scale_cmd_topic" value="preset_scale_cmd"/>
+        <param name="preset_scale_ack_topic" value="preset_scale_ack"/>
+        <param name="nav_status_topic" value="nav_status"/>
+        <param name="camera_service" value="camera_control"/>
+        <param name="terrace_service" value="terrace_control"/>
+        <param name="infrared_service" value="infrared_control"/>
+        <param name="preset_scale_service" value="preset_control"/>
+        <param name="max_zoom_level" value="30.0"/>
+        <param name="middle_zoom_level" value="12.0"/>
+        <param name="min_zoom_level" value="2.0"/>
+        <param name="thermal_zoom_level" value="2.0"/>
+        <param name="terrace_type" value="1"/>
+    </node>
+</launch>

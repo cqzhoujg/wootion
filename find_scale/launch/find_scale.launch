@@ -1,0 +1,31 @@
+<launch>
+    <node pkg="find_scale" type="find_scale" name="find_scale" respawn="true">
+        <param name="node_name" value="find_scale"/>
+        <param name="preset_file" value="preset.ini"/>
+        <param name="find_scalc_cmd_topic" value="find_scale_cmd"/>
+        <param name="find_scalc_ack_topic" value="find_scale_ack"/>
+        <param name="nav_status_topic" value="nav_status"/>
+        <param name="camera_service" value="camera_control"/>
+        <param name="terrace_service" value="terrace_control"/>
+        <param name="infrared_service" value="infrared_control"/>
+        <param name="min_rotate_pan_angle" value="10"/>
+        <param name="min_rotate_tilt_angle" value="10"/>
+        <param name="min_delta_rotate_angle" value="10"/>
+        <param name="level_find_time" value="25"/>
+        <param name="max_find_time" value="60"/>
+        <param name="find_wait_time" value="0"/>
+        <param name="level0_step" value="3"/>
+        <param name="level1_step" value="2"/>
+        <param name="level2_step" value="2"/>
+        <param name="skip_level" value="false"/>
+        <param name="max_offset_delta" value="0.5"/>
+        <param name="environment_type" value="0"/>
+        <param name="one_shot_max_rotate_angle" value="1000"/>
+        <param name="max_rotate_angle_delta" value="100"/>
+        <param name="same_position_delta" value="0.01"/>
+        <param name="same_orientation_delta" value="0.01"/>
+        <param name="similar_angle_delta" value="2000"/>
+        <param name="save_infrared_picture" value="0"/>
+        <param name="terrace_type" value="1"/>
+    </node>
+</launch>
