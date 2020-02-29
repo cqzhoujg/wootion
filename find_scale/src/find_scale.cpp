@@ -49,8 +49,7 @@ FindScale::FindScale():
     m_dLastResult(0.0),
     m_eWorkStatus(idle),
     m_ActionlibServer(m_PublicNodeHandle, "find_scale_action", boost::bind(&FindScale::ExecuteActionCb, this, _1), false),
-    m_bActionLive(false),
-    m_sArmStatus("unknown")
+    m_bActionLive(false)
 {
     m_PrivateNodeHandle.param("node_name", m_sNodeName, ros::this_node::getName());
     m_PrivateNodeHandle.param("preset_file", m_sPresetFile, std::string(("preset.ini")));
@@ -114,18 +113,10 @@ FindScale::FindScale():
     ROS_INFO("similar_angle_delta:%d", m_nSimilarAngleDelta);
     ROS_INFO("save_infrared_picture:%d", m_nSaveInfraredPicture);
     ROS_INFO("terrace_type:%d", m_nTerraceType);
-    if(1 == m_nTerraceType)
-    {
-        ROS_INFO("arm_heart_beat_topic:%s", m_sArmHeartBeatTopic.c_str());
-    }
 
     m_ActionlibServer.registerPreemptCallback(boost::bind(&FindScale::PreemptCb, this));
     m_ActionlibServer.start();
     m_NavStatusSub = m_PublicNodeHandle.subscribe<wootion_msgs::NavStatus>(m_sNavStatusTopic, 1, &FindScale::NavStatusCB, this);
-    if(1 == m_nTerraceType)
-    {
-        m_ArmHeartBeatSub = m_PublicNodeHandle.subscribe<wootion_msgs::GeneralTopic>(m_sArmHeartBeatTopic, 1, &FindScale::ArmHeartBeatSub, this);
-    }
 
     try
     {
@@ -545,25 +536,6 @@ void FindScale::NavStatusCB(const wootion_msgs::NavStatus::ConstPtr &Cmd)
     m_RobotStatusMutex.unlock();
 }
 
-void FindScale::ArmHeartBeatSub(const wootion_msgs::GeneralTopic::ConstPtr &ArmMsg)
-{
-    using namespace boost::property_tree;
-    std::stringstream sStream(ArmMsg->data);
-    ptree pt;
-
-    try
-    {
-        read_json(sStream, pt);
-        m_sArmStatus = pt.get<std::string>("status");
-    }
-    catch (ptree_error &e)
-    {
-        m_sArmStatus = "unknown";
-        ROS_ERROR("parse json error");
-        ResultFailed("parse json error");
-    }
-}
-
 bool FindScale::CallControl(const CommandType &eCommand, const string &sInput, std::string &sOutput, const int nMaxRetry)
 {
     int nRetryCount;
@@ -817,6 +789,7 @@ bool FindScale::SetArmPreset()
     string sInput;
     string sOutput;
     char szValue[MAX_VALUE_SIZE];
+    vector<string> vsResult;
 
     if (!read_profile_string("arm", "arm_file", szValue, MAX_VALUE_SIZE, m_sIniFile.c_str()))
     {
@@ -835,28 +808,6 @@ bool FindScale::SetArmPreset()
         }
 
         this_thread::sleep_for(std::chrono::milliseconds(500));
-        timespec m_tStartTime;
-        timespec_get(&m_tStartTime, TIME_UTC);
-
-        while(m_sArmStatus != "idle")
-        {
-            //机械臂执行拖拽轨迹超时检测
-            this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-            timespec CurrentTime;
-            timespec_get(&CurrentTime, TIME_UTC);
-
-            __time_t pollInterval = (CurrentTime.tv_sec - m_tStartTime.tv_sec) \
-                                    +(CurrentTime.tv_nsec - m_tStartTime.tv_nsec) / 1000000000;
-            if(pollInterval > 120)
-            {
-                sOutput = "play arm orbit timeout error";
-                ROS_WARN("input:%s, output:%s", sInput.c_str(), sOutput.c_str());
-                return false;
-            }
-        }
-
-        this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 
     if (!read_profile_string("arm", "orientation", szValue, MAX_VALUE_SIZE, m_sIniFile.c_str()))
@@ -873,27 +824,11 @@ bool FindScale::SetArmPreset()
         return false;
     }
 
-    this_thread::sleep_for(std::chrono::milliseconds(1000));
-    timespec m_tStartTime;
-    timespec_get(&m_tStartTime, TIME_UTC);
-
-    while(m_sArmStatus != "idle")
-    {
-        //机械臂设置 rool pitch yaw 超时检测
-        this_thread::sleep_for(std::chrono::milliseconds(500));
-
-        timespec CurrentTime;
-        timespec_get(&CurrentTime, TIME_UTC);
-
-        __time_t pollInterval = (CurrentTime.tv_sec - m_tStartTime.tv_sec) \
-                                    +(CurrentTime.tv_nsec - m_tStartTime.tv_nsec) / 1000000000;
-        if(pollInterval > 120)
-        {
-            sOutput = "set arm orientation timeout error";
-            ROS_WARN("input:%s, output:%s", sInput.c_str(), sOutput.c_str());
-            return false;
-        }
-    }
+    this_thread::sleep_for(std::chrono::milliseconds(200));
+	
+	vsResult = SplitString(sInput, ",");
+    m_nPanAngle = (int)round(stoi(vsResult[2]));
+    m_nTiltAngle = (int)round(stoi(vsResult[1]));
 
     return true;
 }
@@ -1065,7 +1000,9 @@ double FindScale::FindByCamera(int nLevel)
         }
         else if (m_nTerraceType == 1)
         {
-            sInput = "0," + std::to_string(nRotateTiltAngle) + "," + std::to_string(nRotatePanAngle);
+            m_nPanAngle -= nRotatePanAngle;
+            m_nTiltAngle -= nRotateTiltAngle;
+            sInput = "0," + std::to_string(m_nTiltAngle) + "," + std::to_string(m_nPanAngle);
 
             if (!CallControl(set_orientation, sInput, sOutput))
             {

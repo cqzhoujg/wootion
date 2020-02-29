@@ -3,6 +3,8 @@
         <param name="elite_ip" value="192.168.100.200"/>
         <param name="elite_port" value="8055"/>
         <param name="elt_speed" value="10"/>
+        <param name="rotate_speed" value="5"/>
+        <param name="rotate_limit_angle" value="30"/>
         <param name="print_level" value="debug"/>
         <param name="track_path" value="/home/ros/track/"/>
     </node>

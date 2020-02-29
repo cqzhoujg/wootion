@@ -126,14 +126,9 @@ typedef enum _tagRotateType
 6	177.0	-177.0*/
 
 //大
-//const static double AxisLimitAngle[12] = {
-//    175.0,  175.0,  158.0,   58.0, 355.0,  175.0,
-//   -175.0, -175.0, -158.0, -258.0,   5.0, -175.0
-//};
-
 const static double AxisLimitAngle[12] = {
-    175.0,  -4.0,  153.0,   48.0, 355.0,  175.0,
-   -175.0, -176.0, -153.0, -258.0,   5.0, -175.0
+    175.0,  175.0,  158.0,   58.0, 355.0,  175.0,
+   -175.0, -175.0, -158.0, -258.0,   5.0, -175.0
 };
 
 static vector<string> SplitString(const string &sInput, const string &sDelimiter)
@@ -175,8 +170,8 @@ public:
     void HeartBeatThreadFunc();
     void ControlThreadFunc();
     int UpdateEltOrigin();
-    int EliteJointMove(elt_robot_pos &targetPos, string &sErr);
-    int EliteMultiPointMove(elt_robot_pos &targetPos, string &sErrMsg);
+    int EliteJointMove(elt_robot_pos &targetPos, double dSpeed, string &sErr);
+    int EliteMultiPointMove(elt_robot_pos &targetPos, double dSpeed, string &sErrMsg);
     int GetElitePos(elt_robot_pos &pos_array);
     int EliteStop(string &sErr);
     int EliteDrag(int nCmd);
@@ -187,6 +182,7 @@ public:
     int EliteClearAlarm();
     bool CheckOrigin(elt_robot_pos &pos_array);
     void PrintJointData(elt_robot_pos &pos_array, string sFunName);
+    bool WaitForMotionStop(int nTimeoutTime, string &sErr);
     bool ArmServiceFunc(wootion_msgs::ControlService::Request &Req, wootion_msgs::ControlService::Response &Resp);
     void ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &TerraceCmd);
     bool ArmOperation(const std::string &sCommand, const std::string &sInput, std::string &sOutput);
@@ -220,12 +216,14 @@ private:
     bool m_bWriteOrigin;
 
     double m_dEltSpeed;//百分比
+    double m_dRotateSpeed;//百分比
+    double m_dRotateLimitAngle;//百分比
 
     timespec m_tRecordDataTime;
 
     ELT_CTX m_eltCtx;
     elt_robot_pos m_EliteCurrentPos;
-    elt_robot_pos m_DragOriginPos;
+    elt_robot_pos m_RotateOriginPos;
     elt_robot_pos m_EltOriginPos;
     std::deque<EltPos> m_dDragTrackDeque;
 

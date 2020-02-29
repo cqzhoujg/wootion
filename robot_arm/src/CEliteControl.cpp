@@ -26,6 +26,8 @@ CEliteControl::CEliteControl():
     PrivateNodeHandle.param("elite_ip", m_sEliteRobotIP, std::string("192.168.100.200"));
     PrivateNodeHandle.param("elite_port", m_nElitePort, 8055);
     PrivateNodeHandle.param("elt_speed", m_dEltSpeed, 10.0);
+    PrivateNodeHandle.param("rotate_speed", m_dRotateSpeed, 5.0);
+    PrivateNodeHandle.param("rotate_limit_angle", m_dRotateLimitAngle, 30.0);
     PrivateNodeHandle.param("print_level", m_sPrintLevel, std::string("debug"));
     PrivateNodeHandle.param("track_path", m_sArmTrackPath, std::string(getenv("HOME")).append("/track/"));
     PublicNodeHandle.param("arm_service", m_sArmService, std::string("arm_control"));
@@ -39,6 +41,8 @@ CEliteControl::CEliteControl():
     ROS_INFO("[ros param] elite_ip:%s", m_sEliteRobotIP.c_str());
     ROS_INFO("[ros param] elite_port:%d",m_nElitePort);
     ROS_INFO("[ros param] elt_speed:%f",m_dEltSpeed);
+    ROS_INFO("[ros param] rotate_speed:%f",m_dRotateSpeed);
+    ROS_INFO("[ros param] rotate_limit_angle:%f",m_dRotateLimitAngle);
     ROS_INFO("[ros param] print_level:%s", m_sPrintLevel.c_str());
     ROS_INFO("[ros param] track_path:%s", m_sArmTrackPath.c_str());
     ROS_INFO("[ros param] arm_service:%s", m_sArmService.c_str());
@@ -375,6 +379,7 @@ void CEliteControl::HeartBeatThreadFunc()
 {
     ROS_INFO("[HeartBeatThreadFunc] start");
     int nTimes = 0;
+    string sOldStatus = vsArmStatus[IDLE];
     while(ros::ok())
     {
         //心跳消息
@@ -389,7 +394,7 @@ void CEliteControl::HeartBeatThreadFunc()
         HeartBeatMsg.data.clear();
 
         //状态
-        string sStatus = "idle";
+        string sStatus = vsArmStatus[IDLE];
         if(m_nEliteState == MOVING || m_nTaskName == RECORD || m_bIgnoreMove)
         {
             sStatus = vsArmStatus[m_nTaskName];
@@ -466,6 +471,17 @@ void CEliteControl::HeartBeatThreadFunc()
             m_HeartBeatPublisher.publish(HeartBeatMsg);
             nTimes = 0;
         }
+
+        //play->idle  record->idle 或者回到原点时 更新 m_RotateOriginPos
+        if((sOldStatus == vsArmStatus[PLAY] || sOldStatus == vsArmStatus[RECORD]) && sStatus == vsArmStatus[IDLE])
+        {
+            memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
+        }
+        if(sOrigin == "true")
+        {
+            memcpy(m_RotateOriginPos, m_EltOriginPos, sizeof(m_RotateOriginPos));
+        }
+        sOldStatus = sStatus;
 
         //异常检测
         if(m_bRecordDragTrack && m_nEliteState == ALARM)
@@ -587,12 +603,14 @@ int CEliteControl::UpdateEltOrigin()
 /*************************************************
 Function: CEliteControl::EliteJointMove
 Description: 艾利特机器人节点运动方式封装
-Input: void
+Input: elt_robot_pos &targetPos 目标距离
+       double dSpeed 移动速度
+       string &sErr 错误返回信息
 Output: 1, 成功
        -1, 失败
 Others: void
 **************************************************/
-int CEliteControl::EliteJointMove(elt_robot_pos &targetPos, string &sErr)
+int CEliteControl::EliteJointMove(elt_robot_pos &targetPos, double dSpeed, string &sErr)
 {
     ROS_INFO("[EliteMultiPointMove] start.");
     int ret;
@@ -609,7 +627,7 @@ int CEliteControl::EliteJointMove(elt_robot_pos &targetPos, string &sErr)
         }
     }
 
-    ret = elt_joint_move( m_eltCtx, targetPos, m_dEltSpeed, &err);
+    ret = elt_joint_move( m_eltCtx, targetPos, dSpeed, &err);
 
     if (ret != ELT_SUCCESS)
     {
@@ -629,12 +647,14 @@ int CEliteControl::EliteJointMove(elt_robot_pos &targetPos, string &sErr)
 /*************************************************
 Function: CEliteControl::EliteMultiPointMove
 Description: 根据目标位置及当前位置插补出平滑轨迹点,并调用艾利特的轨迹运动函数
-Input: void
+Input: elt_robot_pos &targetPos 目标距离
+       double dSpeed 移动速度
+       string &sErr 错误返回信息
 Output: 1, 成功
        -1, 失败
 Others: void
 **************************************************/
-int CEliteControl::EliteMultiPointMove(elt_robot_pos &targetPos, string &sErrMsg)
+int CEliteControl::EliteMultiPointMove(elt_robot_pos &targetPos, double dSpeed, string &sErrMsg)
 {
     ROS_INFO("[EliteMultiPointMove] start");
     elt_error err;
@@ -653,7 +673,7 @@ int CEliteControl::EliteMultiPointMove(elt_robot_pos &targetPos, string &sErrMsg
     }
 
     //设置轨迹路点运动的速度
-    ret = elt_set_waypoint_max_joint_speed( m_eltCtx, m_dEltSpeed, &err);
+    ret = elt_set_waypoint_max_joint_speed( m_eltCtx, dSpeed, &err);
 
     if (ret != ELT_SUCCESS)
     {
@@ -1064,7 +1084,7 @@ bool CEliteControl::EliteGotoOrigin(string &sOutput)
     {
         if(sOutput == "the content of orbit file is null")
         {
-            if(EliteMultiPointMove(m_EltOriginPos, sOutput) == -1)
+            if(EliteMultiPointMove(m_EltOriginPos, m_dEltSpeed, sOutput) == -1)
             {
                 ROS_ERROR("[EliteGotoOrigin]%s",sOutput.c_str());
                 return false;
@@ -1227,6 +1247,48 @@ void CEliteControl::PrintJointData(elt_robot_pos &pos_array, string sFunName)
         sPrintMsg.append(" ").append(to_string(pos_array[i]));
     }
     ROS_INFO("%s",sPrintMsg.c_str());
+}
+
+/*************************************************
+Function: CEliteControl::WaitForMotionStop
+Description: 超时等待函数：等待机械臂运动结束
+Input: int nTimeoutTime, 超时等待时间（单位：秒）
+       string sErr, 存储false时的错误信息
+Output: true or false
+Others: void
+**************************************************/
+bool CEliteControl::WaitForMotionStop(int nTimeoutTime, string &sErr)
+{
+    this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    timespec m_tStartTime;
+    timespec_get(&m_tStartTime, TIME_UTC);
+
+    while(m_nEliteState == MOVING)
+    {
+        //机械臂设置 rool pitch yaw 超时检测
+        this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        timespec CurrentTime;
+        timespec_get(&CurrentTime, TIME_UTC);
+
+        __time_t pollInterval = (CurrentTime.tv_sec - m_tStartTime.tv_sec) \
+                                    +(CurrentTime.tv_nsec - m_tStartTime.tv_nsec) / 1000000000;
+        if(pollInterval > nTimeoutTime)
+        {
+            sErr = "timeout error";
+            ROS_WARN("[WaitForMotionStop]output:%s", sErr.c_str());
+            return false;
+        }
+    }
+    if(m_nEliteState != STOP)
+    {
+        sErr = "arm move error";
+        ROS_WARN("[WaitForMotionStop]output:%s", sErr.c_str());
+        return false;
+    }
+
+    return true;
 }
 
 /*************************************************
@@ -1483,36 +1545,20 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
     else if(sCommand == "play_orbit")
     {
         m_bIgnoreMove = true;
+        bool bHasReset = !CheckOrigin(m_EliteCurrentPos);
         if(!ResetToOrigin(sOutput))
         {
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
 
-        timespec m_tStartTime;
-        timespec_get(&m_tStartTime, TIME_UTC);
-        int bRan = false;
-        while(m_nEliteState != STOP)
+        if(!WaitForMotionStop(20, sOutput))
         {
-            //机械臂执行拖拽轨迹超时检测
-            this_thread::sleep_for(std::chrono::milliseconds(1000));
-            bRan = true;
-
-            timespec CurrentTime;
-            timespec_get(&CurrentTime, TIME_UTC);
-
-            __time_t pollInterval = (CurrentTime.tv_sec - m_tStartTime.tv_sec) \
-                                    +(CurrentTime.tv_nsec - m_tStartTime.tv_nsec) / 1000000000;
-            if(pollInterval > 120)
-            {
-                sOutput = "play orbit reset timeout error";
-                ROS_WARN("[ArmOperation] %s", sOutput.c_str());
-                return false;
-            }
+            return false;
         }
 
         m_nTaskName = PLAY;
-        if(bRan)
+        if(bHasReset)
         {
             this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
@@ -1553,6 +1599,11 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             }
         }
 
+        if(!WaitForMotionStop(20, sOutput))
+        {
+            return false;
+        }
+
         m_sResetOrbitFile = sTrackFile;
         m_bIgnoreMove = false;
     }
@@ -1580,8 +1631,10 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
 
         if(sRollAngle == "+")
         {
-            targetPos[AXIS_ROLL] = AxisLimitAngle[AXIS_SIX_MAX];
-            if(EliteJointMove(targetPos, sOutput) == -1)
+            targetPos[AXIS_ROLL] = m_RotateOriginPos[AXIS_ROLL] + m_dRotateLimitAngle;
+            if(targetPos[AXIS_ROLL] > AxisLimitAngle[AXIS_SIX_MAX])
+                targetPos[AXIS_ROLL] = AxisLimitAngle[AXIS_SIX_MAX];
+            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
             {
                 sOutput.append(",roll + failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1590,8 +1643,10 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         }
         if(sRollAngle == "-")
         {
-            targetPos[AXIS_ROLL] = AxisLimitAngle[AXIS_SIX_MIN];
-            if(EliteJointMove(targetPos, sOutput) == -1)
+            targetPos[AXIS_ROLL] = m_RotateOriginPos[AXIS_ROLL] - m_dRotateLimitAngle;
+            if(targetPos[AXIS_ROLL] < AxisLimitAngle[AXIS_SIX_MIN])
+                targetPos[AXIS_ROLL] = AxisLimitAngle[AXIS_SIX_MIN];
+            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
             {
                 sOutput.append(",roll - failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1601,8 +1656,10 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
 
         if(sPitchAngle == "+")
         {
-            targetPos[AXIS_PITCH] = AxisLimitAngle[AXIS_FOUR_MAX];
-            if(EliteJointMove(targetPos, sOutput) == -1)
+            targetPos[AXIS_PITCH] = m_RotateOriginPos[AXIS_PITCH] + m_dRotateLimitAngle;
+            if(targetPos[AXIS_PITCH] > AxisLimitAngle[AXIS_FOUR_MAX])
+                targetPos[AXIS_PITCH] = AxisLimitAngle[AXIS_FOUR_MAX];
+            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
             {
                 sOutput.append(",tilt + failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1611,8 +1668,10 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         }
         if(sPitchAngle == "-")
         {
-            targetPos[AXIS_PITCH] = AxisLimitAngle[AXIS_FOUR_MIN];
-            if(EliteJointMove(targetPos, sOutput) == -1)
+            targetPos[AXIS_PITCH] = m_RotateOriginPos[AXIS_PITCH] - m_dRotateLimitAngle;
+            if(targetPos[AXIS_PITCH] < AxisLimitAngle[AXIS_FOUR_MIN])
+                targetPos[AXIS_PITCH] = AxisLimitAngle[AXIS_FOUR_MIN];
+            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
             {
                 sOutput.append(",tilt - failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1622,8 +1681,10 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
 
         if(sYawAngle == "+")
         {
-            targetPos[AXIS_YAW] = AxisLimitAngle[AXIS_FIVE_MAX];
-            if(EliteJointMove(targetPos, sOutput) == -1)
+            targetPos[AXIS_YAW] = m_RotateOriginPos[AXIS_YAW] + m_dRotateLimitAngle;
+            if(targetPos[AXIS_YAW] > AxisLimitAngle[AXIS_FIVE_MAX])
+                targetPos[AXIS_YAW] = AxisLimitAngle[AXIS_FIVE_MAX];
+            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
             {
                 sOutput.append(",pan + failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1632,8 +1693,10 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         }
         if(sYawAngle == "-")
         {
-            targetPos[AXIS_YAW] = AxisLimitAngle[AXIS_FIVE_MIN];
-            if(EliteJointMove(targetPos, sOutput) == -1)
+            targetPos[AXIS_YAW] = m_RotateOriginPos[AXIS_YAW] - m_dRotateLimitAngle;
+            if(targetPos[AXIS_YAW] < AxisLimitAngle[AXIS_FIVE_MIN])
+                targetPos[AXIS_YAW] = AxisLimitAngle[AXIS_FIVE_MIN];
+            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
             {
                 sOutput.append(",pan - failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1654,9 +1717,9 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
     }
     else if(sCommand == "get_orientation")
     {
-        sOutput.append(to_string(m_EliteCurrentPos[AXIS_ROLL]));
-        sOutput.append(",").append(to_string(m_EliteCurrentPos[AXIS_PITCH]));
-        sOutput.append(",").append(to_string(m_EliteCurrentPos[AXIS_YAW]));
+        sOutput.append(to_string(int(round(m_EliteCurrentPos[AXIS_ROLL]*100))));
+        sOutput.append(",").append(to_string(int(round(m_EliteCurrentPos[AXIS_PITCH]*100))));
+        sOutput.append(",").append(to_string(int(round(m_EliteCurrentPos[AXIS_YAW]*100))));
     }
     else if(sCommand == "set_orientation")
     {
@@ -1672,16 +1735,41 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         elt_robot_pos targetPos;
         memcpy(targetPos, m_EliteCurrentPos, sizeof(targetPos));
 
-        targetPos[AXIS_ROLL] = stod(vCmdList[0]);
-        targetPos[AXIS_PITCH] = stod(vCmdList[1]);
-        targetPos[AXIS_YAW] = stod(vCmdList[2]);
+        targetPos[AXIS_ROLL] = stod(vCmdList[0])/100;
+        targetPos[AXIS_PITCH] = stod(vCmdList[1])/100;
+        targetPos[AXIS_YAW] = stod(vCmdList[2])/100;
 
-        if(EliteMultiPointMove(targetPos, sOutput) == -1)
+        if(abs(targetPos[AXIS_ROLL] - m_RotateOriginPos[AXIS_ROLL]) > m_dRotateLimitAngle)
+        {
+            double dOriginAngle = m_RotateOriginPos[AXIS_ROLL];
+            ROS_WARN("[ArmOperation] roll angle over limit,target roll=%f, origin roll=%f",targetPos[AXIS_ROLL], dOriginAngle);
+            targetPos[AXIS_ROLL] = ((targetPos[AXIS_ROLL] - dOriginAngle) > 0) ? dOriginAngle + m_dRotateLimitAngle : dOriginAngle - m_dRotateLimitAngle;
+        }
+        if(abs(targetPos[AXIS_PITCH] - m_RotateOriginPos[AXIS_PITCH]) > m_dRotateLimitAngle)
+        {
+            double dOriginAngle = m_RotateOriginPos[AXIS_PITCH];
+            ROS_WARN("[ArmOperation] pitch angle over limit,target pitch=%f, origin pitch=%f",targetPos[AXIS_PITCH], dOriginAngle);
+            targetPos[AXIS_PITCH] = ((targetPos[AXIS_PITCH] - dOriginAngle) > 0) ? dOriginAngle + m_dRotateLimitAngle : dOriginAngle - m_dRotateLimitAngle;
+        }
+        if(abs(targetPos[AXIS_YAW] - m_RotateOriginPos[AXIS_YAW]) > m_dRotateLimitAngle)
+        {
+            double dOriginAngle = m_RotateOriginPos[AXIS_YAW];
+            ROS_WARN("[ArmOperation] yaw angle over limit,target yaw=%f, origin yaw=%f",targetPos[AXIS_YAW], dOriginAngle);
+            targetPos[AXIS_YAW] = ((targetPos[AXIS_YAW] - dOriginAngle) > 0) ? dOriginAngle + m_dRotateLimitAngle : dOriginAngle - m_dRotateLimitAngle;
+        }
+
+        if(EliteMultiPointMove(targetPos, m_dEltSpeed, sOutput) == -1)
         {
             sOutput.append(",roll - failed");
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
+
+        if(!WaitForMotionStop(15, sOutput))
+        {
+            return false;
+        }
+
         m_nTaskName = ROTATE;
     }
     else if(sCommand == "move")
@@ -1744,7 +1832,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             return false;
         }
 
-        if(EliteMultiPointMove(targetPos, sOutput) == -1)
+        if(EliteMultiPointMove(targetPos, m_dEltSpeed, sOutput) == -1)
         {
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
@@ -1757,6 +1845,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         m_nTaskName = RESET;
         m_bIgnoreMove = true;
 
+        //清除碰撞报警所引入的暂停状态
         if(m_nEliteState == PAUSE)
         {
             if(!EliteStop(sOutput))
@@ -1792,6 +1881,12 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
+
+        if(!WaitForMotionStop(20, sOutput))
+        {
+            return false;
+        }
+
         m_sResetOrbitFile = "null";
         m_bIgnoreMove = false;
     }
@@ -1873,7 +1968,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             }
         }
 
-        if(EliteMultiPointMove(targetPos, sOutput) == -1)
+        if(EliteMultiPointMove(targetPos, m_dEltSpeed, sOutput) == -1)
         {
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;

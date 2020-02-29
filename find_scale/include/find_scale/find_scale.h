@@ -14,7 +14,6 @@
 #include <actionlib/server/simple_action_server.h>
 #include "wootion_msgs/GeneralAction.h"
 #include "wootion_msgs/NavStatus.h"
-#include "wootion_msgs/GeneralTopic.h"
 #include "opencv2/core.hpp"
 #include "opencv2/features2d.hpp"
 #include "opencv2/imgcodecs.hpp"
@@ -66,7 +65,6 @@ public:
     void FindScaleThreadFunc();
     void FindScaleCmdCB(const std::string& sPresetPath);
     void NavStatusCB(const wootion_msgs::NavStatus::ConstPtr &Cmd);
-    void ArmHeartBeatSub(const wootion_msgs::GeneralTopic::ConstPtr &ArmMsg);
     bool CallControl(const ServiceCaller::CommandType &eCommand, const std::string &sInput, std::string &sOutput, const int nMaxRetry = 3);
     bool ReadImage(std::string &sPicture, cv::Mat &Image);
     double CalcImageAngle(const cv::Mat &PresetImage, const cv::Mat &CurrentImage, const cv::Rect &RoiPreset, double dZoomLevel, double &dPanAngle, double &dTiltAngle, std::vector<int> &RoiVertex);
@@ -145,7 +143,6 @@ private:
     std::string m_sCaptureTime;
     std::string m_sPictureFileName;
     std::string m_sInfraredFileName;
-    std::string m_sArmStatus;
     std::vector<std::string> m_vsForeignPictureFileName;
     int m_nForeignDetect;
     std::vector<int> m_vnRoiVertex;
