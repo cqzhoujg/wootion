@@ -802,9 +802,25 @@ bool FindScale::SetArmPreset()
         sInput = m_sPresetPath + sArmOrbitFile;
         sInput += ",+";
 
-        if (!CallControl(play_orbit, sInput, sOutput))
+        for (int nRetryCount = 0; nRetryCount < 15; nRetryCount++)
         {
-            ROS_WARN("play arm orbit failed, input:%s, output:%s", sInput.c_str(), sOutput.c_str());
+            if(CallControl(play_orbit, sInput, sOutput))
+            {
+                break;
+            }
+            else
+            {
+                if(sOutput.find("busy") !=  string::npos)
+                {
+                    ROS_WARN("robot is busy, wait for 1s");
+                    this_thread::sleep_for(std::chrono::milliseconds(1000));
+                }
+                else
+                {
+                    ROS_ERROR("play arm orbit failed, input:%s, output:%s", sInput.c_str(), sOutput.c_str());
+                    return false;
+                }
+            }
         }
 
         this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -818,10 +834,25 @@ bool FindScale::SetArmPreset()
 
     sInput = szValue;
 
-    if (!CallControl(set_orientation, sInput, sOutput))
+    for (int nRetryCount = 0; nRetryCount < 15; nRetryCount++)
     {
-        ROS_WARN("set arm orientation failed, input:%s, output:%s", sInput.c_str(), sOutput.c_str());
-        return false;
+        if (CallControl(set_orientation, sInput, sOutput))
+        {
+            break;
+        }
+        else
+        {
+            if(sOutput.find("busy") !=  string::npos)
+            {
+                ROS_WARN("robot is busy, wait for 1s");
+                this_thread::sleep_for(std::chrono::milliseconds(1000));
+            }
+            else
+            {
+                ROS_ERROR("set arm orientation failed, input:%s, output:%s", sInput.c_str(), sOutput.c_str());
+                return false;
+            }
+        }
     }
 
     this_thread::sleep_for(std::chrono::milliseconds(200));

@@ -19,7 +19,7 @@
         <param name="level2_step" value="2"/>
         <param name="skip_level" value="false"/>
         <param name="max_offset_delta" value="0.5"/>
-        <param name="environment_type" value="0"/>
+        <param name="environment_type" value="1"/>
         <param name="one_shot_max_rotate_angle" value="1000"/>
         <param name="max_rotate_angle_delta" value="100"/>
         <param name="same_position_delta" value="0.01"/>
