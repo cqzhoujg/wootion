@@ -2,6 +2,7 @@
     <node pkg="track_robot" type="track_robot" name="track_robot" respawn="true" output="log" >
         <param name="can_speed" value="500000"/>
         <param name="print_can" value="0"/>
+        <param name="imu_odom" value="0"/>
         <param name="sport_mode" value="PP"/>
         <param name="motor_speed" value="0"/>
         <param name="pv_a" value="0.2"/>
@@ -9,10 +10,11 @@
         <param name="auto_run" value="1"/>
         <param name="run_times" value="1"/>
         <param name="return_record" value="0"/>
-        <param name="data_path" value="/home/ros/data/"/>
         <param name="limit_dis" value="1.750"/>
         <param name="scan_title" value="20.0"/>
         <param name="timer_cycle" value="10"/>
         <param name="print_level" value="debug"/>
+        <param name="forward_diameter" value="147.102966"/>
+        <param name="back_diameter" value="147.102966"/>
     </node>
 </launch>

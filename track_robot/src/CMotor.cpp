@@ -3,7 +3,7 @@
 //
 
 #include "CMotor.h"
-
+#include <ros/ros.h>
 
 
 CMotor::CMotor()
@@ -210,7 +210,7 @@ int CMotor::SetAccelerationCmdPack(CanFrame *canFrames, double dAcceleration)
     if(m_nMode == PV)
     {
         CanopenSdoCmdWords ControlWord = SdoControlWords[T_ACCELERATION];
-        int nMotorAcceleration = int((dAcceleration*MOTOR_TRANSMISSION*1000)/(M_PI*TIRE_DIAMETER));
+        int nMotorAcceleration = int((dAcceleration*MOTOR_TRANSMISSION*1000)/(M_PI*actual_tire_diameter));
 
         ControlWord.Parameter += nMotorAcceleration;
 
@@ -254,7 +254,7 @@ int CMotor::SetDecelerationCmdPack(CanFrame *canFrames, double dDeceleration)
     if(m_nMode == PV)
     {
         CanopenSdoCmdWords ControlWord = SdoControlWords[T_DECELERATION];
-        int nMotorDeceleration = int((dDeceleration*MOTOR_TRANSMISSION*1000)/(M_PI*TIRE_DIAMETER));
+        int nMotorDeceleration = int((dDeceleration*MOTOR_TRANSMISSION*1000)/(M_PI*actual_tire_diameter));
 
         ControlWord.Parameter += nMotorDeceleration;
 
@@ -290,7 +290,8 @@ int CMotor::SetNewPosCmdPack(CanFrame *canFrames, int nType, double dDistance)
     CanopenSdoCmdWords ControlWord;
     int nTargetPulse = 0, nCount = 0;
 
-    nTargetPulse = int((dDistance*1000/(M_PI*TIRE_DIAMETER))*PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION);
+    nTargetPulse = int((dDistance*1000/(M_PI*actual_tire_diameter))*PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION);
+    ROS_DEBUG("Target distance:%f and Target pulse:%d and Diameter:%f",dDistance,nTargetPulse,actual_tire_diameter);
 
     ControlWord = SdoControlWords[SET_PP_NEW_POS];
     ControlWord.Parameter += nTargetPulse;
@@ -844,7 +845,7 @@ Others: void
 **************************************************/
 void CMotor::ManageSdoInfo(CanFrame &canFrame)
 {
-    if(canFrame.Data[0] == 0x60 && canFrame.Data[1] == 0x0B && canFrame.Data[2] == 0x20)
+    if(canFrame.Data[0] == 0x43 && canFrame.Data[1] == 0x0B && canFrame.Data[2] == 0x20)
     {
         m_MotorStatus.sErr = GetMotorErrorWords(canFrame);
     }
@@ -898,7 +899,7 @@ Others: void
 **************************************************/
 int CMotor::TransSpeed(double dSpeed)
 {
-    return int((dSpeed*1000/(M_PI*TIRE_DIAMETER))*60*MOTOR_TRANSMISSION);
+    return int((dSpeed*1000/(M_PI*actual_tire_diameter))*60*MOTOR_TRANSMISSION);
 }
 
 /*************************************************
@@ -910,7 +911,7 @@ Others: void
 **************************************************/
 double CMotor::TransSpeed(int16_t nPulses)
 {
-    return ((double)nPulses)/(60*MOTOR_TRANSMISSION*1000)*M_PI*TIRE_DIAMETER;
+    return ((double)nPulses)/(60*MOTOR_TRANSMISSION*1000)*M_PI*actual_tire_diameter;
 }
 
 /*************************************************
@@ -922,7 +923,7 @@ Others: void
 **************************************************/
 int CMotor::TransMileToPulse(double dDistance)
 {
-    return int(( (dDistance*1000) / (M_PI*TIRE_DIAMETER) )*PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION );
+    return int(( (dDistance*1000) / (M_PI*actual_tire_diameter) )*PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION );
 }
 
 CMotor::~CMotor()

@@ -18,6 +18,12 @@
 using namespace std;
 using namespace UsbCan;
 
+//added by btrmg for adjust mileage 2020.01.07
+extern double actual_tire_diameter;
+extern double forward_diameter;
+extern double back_diameter;
+//added end
+
 //50000个脉冲代表一圈,第一版机器人的传动比为 2.5 : 1,即电机2.5转对应轮胎1转,而
 //#define MOTOR_TRANSMISSION 1 //步进电机传动比
 #define MOTOR_TRANSMISSION 16.5 //伺服电机传动比

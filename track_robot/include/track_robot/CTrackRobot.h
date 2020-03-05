@@ -37,6 +37,11 @@ Description: CTrackRobot
 #include "CMotor.h"
 #include "sick_lms400.h"
 
+//added by btrmg for adjust mileage 2020.01.07
+#include "tinyxml2.h"
+using namespace tinyxml2;
+//added end
+
 using namespace UsbCan;
 using namespace std;
 using namespace asr_sick_lms400;
@@ -59,6 +64,7 @@ using namespace asr_sick_lms400;
 #define CURRENT_DATA_TOTAL_NUM 5    //取当前点位置时，用于求平均数的数据的数量。
 
 typedef unsigned long long ULL;
+
 
 typedef enum _tagRobotDirection_
 {
@@ -195,11 +201,15 @@ public:
 
     void CommandCallBack(const custom_msgs::TrainRobotControl::ConstPtr &Command);
     void JoystickCallBack(const custom_msgs::TrainJoyControlCmd::ConstPtr &JoyCommand);
+    void OdomCallBack(const nav_msgs::Odometry::ConstPtr &OdomMsg);
     bool BatteryServiceFunc(custom_msgs::BatteryStatus::Request &Req, custom_msgs::BatteryStatus::Response &Resp);
     bool CurrentPosServiceFunc(custom_msgs::CurrentPosition::Request &Req, custom_msgs::CurrentPosition::Response &Resp);
     void ScanCallBack(const sensor_msgs::LaserScan::ConstPtr &scanData);
     void ImuCallBack(const sensor_msgs::Imu::ConstPtr &ImuData);
     void ScanThreadFunc();
+    //added by btrmg for adjust mileage 2020.01.07
+    int updata_XML(string paramName, string paramValue);
+    //added end
 
 private:
     UsbCan::CUsbCan UsbCan;
@@ -211,6 +221,7 @@ private:
 
     int m_nCanSpeed;
     int m_nPrintCanRTX;
+    int m_nUseImuOdom;
     int m_nControlMode;
     int m_nUseAutoRun;
     int m_nAutoRunStatus;
@@ -240,8 +251,11 @@ private:
     bool m_bCheckSdo;
     bool m_bIsEStopButtonPressed;
     bool m_bMotionEnd;
+	bool m_bIsUpdateOrign;
 
     double m_dDistance;
+    double m_dCurrentOdom;
+    double m_dOdom;
     double m_dDisTemp;
     double m_dTargetDis;
     double m_dAlarmTargetDis;
@@ -258,13 +272,15 @@ private:
     double m_dRealScanTitle;
     double m_dLimitDis;
 
-    std::string m_sMOde;
+    std::string m_sMode;
     std::string m_sSubCmdTopic;
     std::string m_sSubJoyTopic;
     std::string m_sSubScanTopic;
     std::string m_sSubImuTopic;
+    std::string m_sSubOdomTopic;
     std::string m_sPubPositionTopic;
     std::string m_sPubStatusTopic;
+    std::string m_sPubOdomTopic;
     std::string m_sHeartBeatTopic;
     std::string m_sPrintLevel;
     std::string m_sMotorOneStatus;
@@ -307,10 +323,13 @@ private:
     ros::Subscriber m_JoystickSubscriber;
     ros::Subscriber m_ScanSubscriber;
     ros::Subscriber m_ImuSubscriber;
+    ros::Subscriber m_OdomSubscriber;
 
     ros::Publisher m_PositionPublisher;
     ros::Publisher m_StatusPublisher;
     ros::Publisher m_HeartBeatPublisher;
+    ros::Publisher m_OdomPublisher;
+
     ros::ServiceServer m_BatteryService;
     ros::ServiceServer m_CurrentPosService;
 

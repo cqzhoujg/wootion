@@ -7,6 +7,11 @@ Description: CTrackRobot
 
 #include "CTrackRobot.h"
 
+double actual_tire_diameter;
+double forward_diameter;
+double back_diameter;
+
+
 CTrackRobot::CTrackRobot():
     m_nDirection(FORWARD),
     m_nControlMode(TASK),
@@ -27,8 +32,9 @@ CTrackRobot::CTrackRobot():
     m_bForwardRelocation(true),
     m_bCheckSdo(true),
     m_bIsEStopButtonPressed(true),
+    m_bIsUpdateOrign(false),
     m_dDistance(0),
-    m_dCurrentSpeed1(0),
+    m_dOdom(0),
     m_dCurrentSpeed(0),
     m_dTargetSpeedTemp(0),
     m_dLimitDis(1.750),
@@ -43,7 +49,8 @@ CTrackRobot::CTrackRobot():
 
     PrivateNodeHandle.param("can_speed", m_nCanSpeed, 500000);
     PrivateNodeHandle.param("print_can", m_nPrintCanRTX, 0);
-    PrivateNodeHandle.param("sport_mode", m_sMOde, std::string("PP"));
+    PrivateNodeHandle.param("imu_odom", m_nUseImuOdom, 1);
+    PrivateNodeHandle.param("sport_mode", m_sMode, std::string("PP"));
     PrivateNodeHandle.param("motor_speed", m_dTargetSpeed, 0.0);
     PrivateNodeHandle.param("pv_a", m_dPvAcceleration, 0.2);
     PrivateNodeHandle.param("target_dis", m_dTargetDis, 10.0);
@@ -53,13 +60,19 @@ CTrackRobot::CTrackRobot():
     PrivateNodeHandle.param("scan_title", m_dScanTitle, 20.0);
     PrivateNodeHandle.param("timer_cycle", m_dTimerCycle, 10.0);
     PrivateNodeHandle.param("print_level", m_sPrintLevel, std::string("debug"));
+    //added by btrmg for adjust mileage 2020.01.07
+    PrivateNodeHandle.param("forward_diameter",forward_diameter,143.175);
+    PrivateNodeHandle.param("back_diameter",back_diameter,143.175);
+    //added end
 
     PublicNodeHandle.param("sub_cmd_topic", m_sSubCmdTopic, std::string("train_robot_control"));
     PublicNodeHandle.param("sub_joy_topic", m_sSubJoyTopic, std::string("train_joy"));
     PublicNodeHandle.param("sub_scan_topic", m_sSubScanTopic, std::string("scan"));
     PublicNodeHandle.param("sub_scan_topic", m_sSubImuTopic, std::string("imu0"));
+    PublicNodeHandle.param("robot_odom", m_sSubOdomTopic, std::string("odom"));
     PublicNodeHandle.param("pub_pos_topic", m_sPubPositionTopic, std::string("train_robot_position"));
     PublicNodeHandle.param("pub_status_topic", m_sPubStatusTopic, std::string("train_robot_status"));
+    PublicNodeHandle.param("track_odom", m_sPubOdomTopic, std::string("robot_odom"));
     PublicNodeHandle.param("pub_heart_beat_topic", m_sHeartBeatTopic, std::string("train_robot_heart_beat"));
 
     // Se the logging level manually to Debug, Info, Warn, Error
@@ -77,9 +90,10 @@ CTrackRobot::CTrackRobot():
 
     ROS_INFO("[ros param] can_speed:%d", m_nCanSpeed);
     ROS_INFO("[ros param] print_can_flag:%d", m_nPrintCanRTX);
+    ROS_INFO("[ros param] imu_odom:%d", m_nUseImuOdom);
     ROS_INFO("----------------------------------");
     ROS_INFO("motor control parameters:");
-    ROS_INFO("[ros param] sport_mode:%s", m_sMOde.c_str());
+    ROS_INFO("[ros param] sport_mode:%s", m_sMode.c_str());
     ROS_INFO("[ros param] motor_speed:%f", m_dTargetSpeed);
     ROS_INFO("[ros param] pv_a:%f", m_dPvAcceleration);
     ROS_INFO("[ros param] target_dis:%f", m_dTargetDis);
@@ -89,6 +103,10 @@ CTrackRobot::CTrackRobot():
     ROS_INFO("[ros param] scan_title:%f", m_dScanTitle);
     ROS_INFO("[ros param] timer_cycle:%.1f", m_dTimerCycle);
     ROS_INFO("[ros param] print_level:%s", m_sPrintLevel.c_str());
+    //added by btrmg for adjust mileage 2020.01.07
+    ROS_INFO("[ros param] forward_diameter:%f", forward_diameter);
+    ROS_INFO("[ros param] back_diameter:%f", back_diameter);
+    //added end
     ROS_INFO("----------------------------------");
     ROS_INFO("ros topics:");
     ROS_INFO("[ros param] sub_cmd_topic:%s", m_sSubCmdTopic.c_str());
@@ -98,16 +116,19 @@ CTrackRobot::CTrackRobot():
     ROS_INFO("[ros param] pub_stat_topic:%s", m_sPubPositionTopic.c_str());
     ROS_INFO("[ros param] pub_status_topic:%s", m_sPubStatusTopic.c_str());
     ROS_INFO("[ros param] pub_heart_beat_topic:%s", m_sHeartBeatTopic.c_str());
+
     ROS_INFO("----------------------------------");
 
-    if(m_sMOde == "PP")
+    if(m_sMode == "PP" && 1 != m_nUseImuOdom)
     {
         m_nMode = PP;
     }
-    else if(m_sMOde == "PV")
+    else
     {
         m_nMode = PV;
     }
+
+    actual_tire_diameter = forward_diameter;
 
     m_dInitialAngle = 180.0-m_dScanTitle-(90.0-LASER_ANGLE_RANGE/2)-LASER_EXCISION_ANGLE;
 
@@ -207,9 +228,17 @@ CTrackRobot::CTrackRobot():
 //    m_ScanSubscriber = PublicNodeHandle.subscribe<sensor_msgs::LaserScan>(m_sSubScanTopic, 10, boost::bind(&CTrackRobot::ScanCallBack, this, _1));
     m_ImuSubscriber = PublicNodeHandle.subscribe<sensor_msgs::Imu>(m_sSubImuTopic, 10, boost::bind(&CTrackRobot::ImuCallBack, this, _1));
     m_CommandSubscriber = PublicNodeHandle.subscribe<custom_msgs::TrainRobotControl>(m_sSubCmdTopic, 1, boost::bind(&CTrackRobot::CommandCallBack, this, _1));
+
+    if(1 == m_nUseImuOdom)
+    {
+        m_OdomSubscriber = PublicNodeHandle.subscribe<nav_msgs::Odometry>(m_sSubOdomTopic, 1, boost::bind(&CTrackRobot::OdomCallBack, this, _1));
+    }
+
     m_PositionPublisher = PublicNodeHandle.advertise<custom_msgs::TrainRobotPosition>(m_sPubPositionTopic, 10);
     m_StatusPublisher = PublicNodeHandle.advertise<custom_msgs::TrainRobotControlAck>(m_sPubStatusTopic, 10);
     m_HeartBeatPublisher = PublicNodeHandle.advertise<custom_msgs::TrainRobotHeartBeat>(m_sHeartBeatTopic, 10);
+    m_OdomPublisher = PublicNodeHandle.advertise<nav_msgs::Odometry>(m_sPubOdomTopic, 10);
+
     m_BatteryService = PublicNodeHandle.advertiseService("battery_status", &CTrackRobot::BatteryServiceFunc, this);
     m_CurrentPosService = PublicNodeHandle.advertiseService("current_position", &CTrackRobot::CurrentPosServiceFunc, this);
     m_DisplacementTimer = PublicNodeHandle.createTimer(ros::Duration(m_dTimerCycle/1000.0), boost::bind(&CTrackRobot::DisplacementTimerFunc, this));
@@ -441,9 +470,12 @@ void CTrackRobot::CANManageThreadFunc()
                     SendCanFrame(&SpeedCanData, 1);
                 }
 
-                if(m_bMotorRunning)
+                if(1 != m_nUseImuOdom)
                 {
-                    CalcRobotMileage();
+                    if(m_bMotorRunning)
+                    {
+                        CalcRobotMileage();
+                    }
                 }
             }
 
@@ -783,6 +815,30 @@ Others: void
 **************************************************/
 void CTrackRobot::DisplacementTimerFunc()
 {
+    if(1 == m_nUseImuOdom)
+    {
+        nav_msgs::Odometry OdomMsg;
+
+        OdomMsg.header.stamp = ros::Time::now();
+        OdomMsg.header.frame_id = "odom";
+
+        if(m_bIsEStopButtonPressed)
+        {
+            m_dCurrentSpeed = 0;
+        }
+
+        OdomMsg.twist.twist.linear.x = m_dCurrentSpeed;
+
+        OdomMsg.twist.covariance[0] = 1e-8;
+        OdomMsg.twist.covariance[7] = 1e-8;
+        OdomMsg.twist.covariance[14] = 1e-8;
+        OdomMsg.twist.covariance[21] = 1e-8;
+        OdomMsg.twist.covariance[28] = 1e-8;
+        OdomMsg.twist.covariance[35] = 1e-8;
+
+        m_OdomPublisher.publish(OdomMsg);
+    }
+
     if(!m_bIsMotorInit || m_bIsEStopButtonPressed)
         return;
 
@@ -905,12 +961,12 @@ void CTrackRobot::CalcRobotMileage()
 
     if(m_nMode == PV)
     {
-        double dDistance = (nMotor_One_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000;
-        m_dDistance = ((nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000 + dDistance) / 2;
+        double dDistance = (nMotor_One_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000;
+        m_dDistance = ((nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000 + dDistance) / 2;
     }
     else if(m_nMode == PP)
     {
-        m_dDistance = (nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000;
+        m_dDistance = (nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000;
     }
 
     //	if(m_nDirection == BACKWARD)
@@ -1144,6 +1200,7 @@ Others: void
 void CTrackRobot::ForwardMotion()
 {
     m_nDirection = FORWARD;
+    actual_tire_diameter = forward_diameter;
 
     if(m_nMode == PP)
     {
@@ -1191,6 +1248,8 @@ Others: void
 void CTrackRobot::BackwardMotion()
 {
     m_nDirection = BACKWARD;
+
+    actual_tire_diameter = back_diameter;
 
     if(m_nMode == PP)
     {
@@ -1241,6 +1300,14 @@ void CTrackRobot::ReturnToOrigin(bool bDoneReturn)
     {
         m_dDisTemp = 0xFFFFFFFFFFFFFFFF;
     }
+    if(m_nDirection == FORWARD || m_nDirection == BACKWARD_RETURN)
+    {
+        actual_tire_diameter = forward_diameter;
+    }
+    else if(m_nDirection == BACKWARD || m_nDirection == FORWARD_RETURN)
+    {
+        actual_tire_diameter = back_diameter;
+    }
 
     if(m_nMode == PP)
     {
@@ -1249,7 +1316,7 @@ void CTrackRobot::ReturnToOrigin(bool bDoneReturn)
         {
             int nMotor_Two_Displacement = m_CurrentMotorPos.nMotorTwoPos-m_RelocationMotorPos.nMotorTwoPos;
 
-            dTargetDis = (nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000;
+            dTargetDis = (nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000;
 
             if(dTargetDis < 0)
             {
@@ -1266,7 +1333,7 @@ void CTrackRobot::ReturnToOrigin(bool bDoneReturn)
 
         if(dTargetDis <= 0.002 || abs(m_dDistance) <= 0.002)
         {
-            ROS_DEBUG("[ReturnToOrigin] Robot is already at the origin,return");
+            ROS_DEBUG("[ReturnToOrigin] Robot is already at the origin,return,dTargetDis=%f,m_dDistance=%f",dTargetDis,m_dDistance);
             return;
         }
 
@@ -1294,8 +1361,8 @@ void CTrackRobot::ReturnToOrigin(bool bDoneReturn)
             m_MotorPos.nMotorOnePos = m_RelocationMotorPos.nMotorOnePos;
             m_MotorPos.nMotorTwoPos = m_RelocationMotorPos.nMotorTwoPos;
 
-            double dMotorOneDis = (nMotor_One_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000;
-            dTargetDis = ((nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000 + dMotorOneDis)/2;
+            double dMotorOneDis = (nMotor_One_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000;
+            dTargetDis = ((nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000 + dMotorOneDis)/2;
 
             if(dTargetDis < 0)
             {
@@ -1981,6 +2048,32 @@ void CTrackRobot::CommandCallBack(const custom_msgs::TrainRobotControl::ConstPtr
         }
         ReturnToOrigin();
     }
+    //added by btrmg for adjust mileage 2020.01.07
+    else if(Command->cmd =="adjust_mileage")
+    {
+        ROS_INFO("[CommandCallBack] adjust expected mileage:%d and actual mileage:%d",Command->expected_mileage,Command->actual_mileage);
+        if(0 != Command->actual_mileage && 0 != Command->expected_mileage)
+        {
+            if(Command->speed > 0)
+            {
+                forward_diameter = forward_diameter/Command->expected_mileage*Command->actual_mileage;
+                string str_diameter;
+                str_diameter = std::to_string(forward_diameter);
+                updata_XML("forward_diameter",str_diameter);
+                ROS_DEBUG("[CommandCallBack] adjusted forward diamete is:%f",forward_diameter);
+            }
+            else if(Command->speed < 0)
+            {
+                back_diameter = back_diameter/Command->expected_mileage*Command->actual_mileage;
+                string str_diameter;
+                str_diameter = std::to_string(back_diameter);
+                updata_XML("back_diameter",str_diameter);
+                ROS_DEBUG("[CommandCallBack] adjusted back diameter is :%f",back_diameter);
+            }
+
+        }
+    }
+    //added end
 }
 
 /*************************************************
@@ -1993,6 +2086,29 @@ Others: void
 void CTrackRobot::JoystickCallBack(const custom_msgs::TrainJoyControlCmd::ConstPtr &JoyCommand)
 {
 
+}
+
+/*************************************************
+Function: CTrackRobot::OdomCallBack
+Description: 滤波后的历程消息
+Input: nav_msgs::Odometry::ConstPtr &OdomMsg , 滤波后的里程消息
+Output: void
+Others: void
+**************************************************/
+void CTrackRobot::OdomCallBack(const nav_msgs::Odometry::ConstPtr &OdomMsg)
+{
+    m_dCurrentOdom = OdomMsg->pose.pose.position.x;
+    m_dDistance = m_dCurrentOdom - m_dOdom;
+
+    if(m_nDirection == BACKWARD || m_nDirection == BACKWARD_RETURN)
+    {
+        m_dDistance =  m_dOdom - m_dCurrentOdom;
+    }
+    if(m_bIsUpdateOrign)
+    {
+        m_dOdom = m_dCurrentOdom;
+        m_bIsUpdateOrign = false;
+    }
 }
 
 /*************************************************
@@ -2480,13 +2596,13 @@ int CTrackRobot::TransPosBufData(sPositionData &desPosData, const sScanBuf &srcB
         {
             nMotor_One_Displacement = m_CurrentMotorPos.nMotorOnePos-m_RelocationMotorPos.nMotorOnePos;
             nMotor_Two_Displacement = m_CurrentMotorPos.nMotorTwoPos-m_RelocationMotorPos.nMotorTwoPos;
-            dMotorOneDis = (nMotor_One_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000;
-            dDistance = ((nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000 +dMotorOneDis)/2;
+            dMotorOneDis = (nMotor_One_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000;
+            dDistance = ((nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000 +dMotorOneDis)/2;
         }
         else if(m_nMode == PP)
         {
             nMotor_Two_Displacement = m_CurrentMotorPos.nMotorTwoPos-m_RelocationMotorPos.nMotorTwoPos;
-            dDistance = (nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000;
+            dDistance = (nMotor_Two_Displacement/(PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000;
         }
 
 
@@ -2602,6 +2718,7 @@ void CTrackRobot::UpdateOriginPosition()
         m_RelocationMotorPos.nMotorTwoPos = m_CurrentMotorPos.nMotorTwoPos;
     }
     m_dDistance = 0.0;
+    m_bIsUpdateOrign = true;
     ROS_DEBUG("[UpdateOriginPosition] m_MotorPos.nMotorOnePos=%d,m_MotorPos.nMotorTwoPos=%d",m_MotorPos.nMotorOnePos,m_MotorPos.nMotorTwoPos);
 }
 
@@ -2738,7 +2855,7 @@ void CTrackRobot::HeartBeatThreadFunc()
             int nMotor_One_Displacement = m_CurrentMotorPos.nMotorOnePos-m_RelocationMotorPos.nMotorOnePos;
             int nMotor_Two_Displacement = m_CurrentMotorPos.nMotorTwoPos-m_RelocationMotorPos.nMotorTwoPos;
 
-            dDistance = ((nMotor_One_Displacement+nMotor_Two_Displacement)/(2.0*PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*TIRE_DIAMETER/1000;
+            dDistance = ((nMotor_One_Displacement+nMotor_Two_Displacement)/(2.0*PULSES_OF_MOTOR_ONE_TURN*MOTOR_TRANSMISSION))*M_PI*actual_tire_diameter/1000;
 
             if(!m_bForwardRelocation)
             {
@@ -2940,3 +3057,48 @@ CTrackRobot::~CTrackRobot()
     delete m_pHeartBeatThread;
     delete m_pScanThread;
 }
+
+/*************************************************
+Function: CTrackRobot::updata_XML
+Description:修改配置文件中的轮子直径
+Input:
+    path 配置文件名
+    updataposion，从外到更新节点的路径
+    attributes,更新元素
+
+Output: 执行结果
+**************************************************/
+int CTrackRobot::updata_XML(string paramName, string paramValue)
+{
+    XMLDocument doc;
+    char buf[100];
+    getcwd(buf,100);
+    strcat(buf,"/../catkin_ws/src/track_robot/launch/track_robot.launch");
+    const char* path_updata = buf;
+    const char* paranName_updata = paramName.c_str();
+    const char* paramValue_updata = paramValue.c_str();
+    if (doc.LoadFile(path_updata))
+    {
+        ROS_DEBUG("the launch file is:%s",buf);
+        return 0;
+    }
+    XMLElement *current_root = doc.RootElement();
+    XMLElement *nodeName = current_root->FirstChildElement("node");
+    if(NULL==nodeName)
+        return 0;
+    XMLElement *paramNode = nodeName->FirstChildElement("param");
+    while (paramNode!=NULL)
+    {
+        string str = paramNode->Attribute("name");
+        if(str.compare(paranName_updata)==0)
+        {
+            paramNode->SetAttribute("value",paramValue_updata);
+            break;
+        }
+        paramNode = paramNode->NextSiblingElement();
+    }
+
+    doc.SaveFile(path_updata, false);
+    return 1;
+}
+
