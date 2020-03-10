@@ -21,8 +21,6 @@ CEliteControl::CEliteControl():
     ros::NodeHandle PublicNodeHandle;
     ros::NodeHandle PrivateNodeHandle("~");
 
-    PrivateNodeHandle.param("serial_port", m_sSerialPort, std::string("/dev/ttyS0"));
-    PrivateNodeHandle.param("serial_speed", m_nSerialSpeed, 2400);
     PrivateNodeHandle.param("elite_ip", m_sEliteRobotIP, std::string("192.168.100.200"));
     PrivateNodeHandle.param("elite_port", m_nElitePort, 8055);
     PrivateNodeHandle.param("elt_speed", m_dEltSpeed, 10.0);
@@ -36,8 +34,6 @@ CEliteControl::CEliteControl():
     PublicNodeHandle.param("arm_heart", m_sHeartBeatTopic, std::string("arm_heart_beat"));
     PublicNodeHandle.param("arm_abnormal", m_sAbnormalTopic, std::string("arm_exception"));
 
-    ROS_INFO("[ros param] serial_port:%s", m_sSerialPort.c_str());
-    ROS_INFO("[ros param] serial_speed:%d", m_nSerialSpeed);
     ROS_INFO("[ros param] elite_ip:%s", m_sEliteRobotIP.c_str());
     ROS_INFO("[ros param] elite_port:%d",m_nElitePort);
     ROS_INFO("[ros param] elt_speed:%f",m_dEltSpeed);
@@ -194,12 +190,6 @@ bool CEliteControl::Init()
     if (UpdateEltOrigin() == -1)
     {
         ROS_ERROR("[Init] UpdateEltOrigin error");
-        return false;
-    }
-
-    if(!m_ExtraCtrl.Init(m_sSerialPort, m_nSerialSpeed))
-    {
-        ROS_ERROR("[Init] ExtraCtrl init error");
         return false;
     }
 
@@ -1615,7 +1605,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
 
         vector<string> vCmdList = SplitString(sInput, ",");
 
-        if (vCmdList.size() < 3)
+        if (vCmdList.size() < 4)
         {
             sOutput = "input error" + sInput;
             ROS_ERROR("[ArmOperation] %s",sOutput.c_str());
@@ -1626,6 +1616,8 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         sPitchAngle = vCmdList[1];
         sYawAngle = vCmdList[2];
 
+        double dSpeed = (m_dRotateSpeed*stod(vCmdList[3]))/63;
+
         elt_robot_pos targetPos;
         memcpy(targetPos, m_EliteCurrentPos, sizeof(targetPos));
 
@@ -1634,7 +1626,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             targetPos[AXIS_ROLL] = m_RotateOriginPos[AXIS_ROLL] + m_dRotateLimitAngle;
             if(targetPos[AXIS_ROLL] > AxisLimitAngle[AXIS_SIX_MAX])
                 targetPos[AXIS_ROLL] = AxisLimitAngle[AXIS_SIX_MAX];
-            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
+            if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
             {
                 sOutput.append(",roll + failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1646,7 +1638,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             targetPos[AXIS_ROLL] = m_RotateOriginPos[AXIS_ROLL] - m_dRotateLimitAngle;
             if(targetPos[AXIS_ROLL] < AxisLimitAngle[AXIS_SIX_MIN])
                 targetPos[AXIS_ROLL] = AxisLimitAngle[AXIS_SIX_MIN];
-            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
+            if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
             {
                 sOutput.append(",roll - failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1659,7 +1651,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             targetPos[AXIS_PITCH] = m_RotateOriginPos[AXIS_PITCH] + m_dRotateLimitAngle;
             if(targetPos[AXIS_PITCH] > AxisLimitAngle[AXIS_FOUR_MAX])
                 targetPos[AXIS_PITCH] = AxisLimitAngle[AXIS_FOUR_MAX];
-            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
+            if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
             {
                 sOutput.append(",tilt + failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1671,7 +1663,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             targetPos[AXIS_PITCH] = m_RotateOriginPos[AXIS_PITCH] - m_dRotateLimitAngle;
             if(targetPos[AXIS_PITCH] < AxisLimitAngle[AXIS_FOUR_MIN])
                 targetPos[AXIS_PITCH] = AxisLimitAngle[AXIS_FOUR_MIN];
-            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
+            if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
             {
                 sOutput.append(",tilt - failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1684,7 +1676,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             targetPos[AXIS_YAW] = m_RotateOriginPos[AXIS_YAW] + m_dRotateLimitAngle;
             if(targetPos[AXIS_YAW] > AxisLimitAngle[AXIS_FIVE_MAX])
                 targetPos[AXIS_YAW] = AxisLimitAngle[AXIS_FIVE_MAX];
-            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
+            if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
             {
                 sOutput.append(",pan + failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1696,7 +1688,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             targetPos[AXIS_YAW] = m_RotateOriginPos[AXIS_YAW] - m_dRotateLimitAngle;
             if(targetPos[AXIS_YAW] < AxisLimitAngle[AXIS_FIVE_MIN])
                 targetPos[AXIS_YAW] = AxisLimitAngle[AXIS_FIVE_MIN];
-            if(EliteJointMove(targetPos, m_dRotateSpeed, sOutput) == -1)
+            if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
             {
                 sOutput.append(",pan - failed");
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
@@ -1890,41 +1882,36 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         m_sResetOrbitFile = "null";
         m_bIgnoreMove = false;
     }
-    else if (sCommand == "brush_on")
+    //机械臂1轴旋转180,镜头朝向相对化工机器人调转180.
+    else if(sCommand == "turn_around")
     {
-        if(! m_ExtraCtrl.ExecuteTask(BURSH_ON))
+        if(!CheckOrigin(m_EliteCurrentPos))
         {
-            sOutput = "brush on failed";
+            sOutput = "robot arm is not at the origin";
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
-    }
-    else if (sCommand == "brush_off")
-    {
-        if(! m_ExtraCtrl.ExecuteTask(BURSH_OFF))
+        m_nTaskName = TURN_AROUND;
+        m_bIgnoreMove = true;
+
+        elt_robot_pos targetPos;
+        memcpy(targetPos, m_EltOriginPos, sizeof(targetPos));
+
+        targetPos[0] = targetPos[0]+175 > AxisLimitAngle[0] ? targetPos[0]-175 : targetPos[0]+175;
+
+        if(EliteMultiPointMove(targetPos, m_dEltSpeed, sOutput) == -1)
         {
-            sOutput = "brush off failed";
+            sOutput.append(",turn around failed");
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
-    }
-    else if (sCommand == "light_on")
-    {
-        if(! m_ExtraCtrl.ExecuteTask(LIGHT_ON))
+
+        if(!WaitForMotionStop(20, sOutput))
         {
-            sOutput = "light on failed";
-            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
             return false;
         }
-    }
-    else if (sCommand == "light_off")
-    {
-        if(! m_ExtraCtrl.ExecuteTask(LIGHT_OFF))
-        {
-            sOutput = "light off failed";
-            ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
-            return false;
-        }
+
+        m_bIgnoreMove = false;
     }
     //测试代码，运动到固定点
     else if (sCommand == "goto")

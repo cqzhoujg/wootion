@@ -36,7 +36,6 @@
 #include "wootion_msgs/ControlService.h"
 #include "wootion_msgs/GeneralTopic.h"
 #include "CFileRW.h"
-#include "CArmExtraCtrl.h"
 
 using namespace std;
 
@@ -57,7 +56,8 @@ typedef enum _tagArmStatus
     PLAY = 2,
     RESET = 3,
     ROTATE = 4,
-    ERROR = 5,
+    TURN_AROUND = 5,
+    ERROR = 6,
 }ArmStatus;
 
 const static vector<string> vsArmStatus = {
@@ -66,6 +66,7 @@ const static vector<string> vsArmStatus = {
     "play",
     "reset",
     "rotate",
+    "turn_around",
     "error",
 };
 
@@ -188,7 +189,6 @@ public:
     bool ArmOperation(const std::string &sCommand, const std::string &sInput, std::string &sOutput);
 
 private:
-    string m_sSerialPort;
     string m_sEliteRobotIP;
     string m_sPrintLevel;
     string m_sArmTrackPath;
@@ -202,7 +202,6 @@ private:
     string m_sResetOrbitFile;
     string m_sStatus;
 
-    int m_nSerialSpeed;
     int m_nElitePort;
     int m_nEliteState;
     int m_nCheckReceiver;
@@ -240,7 +239,6 @@ private:
 
     CFileRW m_TrackFile;
     CFileRW m_ResetFile;
-    CArmExtraCtrl m_ExtraCtrl;
 
     std::mutex m_ResetFileMutex;
 };
