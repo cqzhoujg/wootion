@@ -1461,6 +1461,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         if(!ResetToOrigin(sOutput))
         {
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            m_bIgnoreMove = false;
             return false;
         }
 
@@ -1483,6 +1484,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             {
                 sOutput = "record orbit reset timeout error";
                 ROS_WARN("[ArmOperation] %s", sOutput.c_str());
+                m_bIgnoreMove = false;
                 return false;
             }
         }
@@ -1502,12 +1504,14 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         {
             sOutput = "open file failed";
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            m_bIgnoreMove = false;
             return false;
         }
         if(EliteDrag(ENABLE) == -1)
         {
             sOutput = "enable drag failed";
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            m_bIgnoreMove = false;
             return false;
         }
         m_sResetOrbitFile = sTrackFile;
@@ -1539,11 +1543,13 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         if(!ResetToOrigin(sOutput))
         {
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            m_bIgnoreMove = false;
             return false;
         }
 
         if(!WaitForMotionStop(20, sOutput))
         {
+            m_bIgnoreMove = false;
             return false;
         }
 
@@ -1570,6 +1576,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         {
             sOutput = "input error" + sInput;
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            m_bIgnoreMove = false;
             return false;
         }
 
@@ -1579,18 +1586,21 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             {
                 sOutput = "orbit file is null";
                 ROS_ERROR("[ArmOperation]%s", sOutput.c_str());
+                m_bIgnoreMove = false;
                 return false;
             }
 
             if (EliteRunDragTrack(sTrackFile, m_dEltSpeed, FORWARD, sOutput) == -1)
             {
                 ROS_ERROR("[ArmOperation]%s", sOutput.c_str());
+                m_bIgnoreMove = false;
                 return false;
             }
         }
 
         if(!WaitForMotionStop(20, sOutput))
         {
+            m_bIgnoreMove = false;
             return false;
         }
 
@@ -1843,6 +1853,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             if(!EliteStop(sOutput))
             {
                 ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+                m_bIgnoreMove = false;
                 return false;
             }
 
@@ -1863,6 +1874,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
                 {
                     sOutput = "reset collision alarm timeout error";
                     ROS_WARN("[ArmOperation] %s", sOutput.c_str());
+                    m_bIgnoreMove = false;
                     return false;
                 }
             }
@@ -1871,11 +1883,13 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         if(!ResetToOrigin(sOutput))
         {
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            m_bIgnoreMove = false;
             return false;
         }
 
         if(!WaitForMotionStop(20, sOutput))
         {
+            m_bIgnoreMove = false;
             return false;
         }
 
@@ -1903,11 +1917,13 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         {
             sOutput.append(",turn around failed");
             ROS_ERROR("[ArmOperation]%s",sOutput.c_str());
+            m_bIgnoreMove = false;
             return false;
         }
 
         if(!WaitForMotionStop(20, sOutput))
         {
+            m_bIgnoreMove = false;
             return false;
         }
 
