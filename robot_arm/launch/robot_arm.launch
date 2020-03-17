@@ -1,5 +1,7 @@
 <launch>
-    <node pkg="robot_arm" type="robot_arm" name="robot_arm" respawn="true" output="screen">
+    <node pkg="robot_arm" type="robot_arm" name="robot_arm" respawn="true" output="log">
+        <param name="node_name" value="robot_arm"/>
+        <param name="check_receiver" value="0"/>
         <param name="elite_ip" value="192.168.100.200"/>
         <param name="elite_port" value="8055"/>
         <param name="elt_speed" value="10"/>

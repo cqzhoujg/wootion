@@ -189,6 +189,7 @@ public:
     bool ArmOperation(const std::string &sCommand, const std::string &sInput, std::string &sOutput);
 
 private:
+    string m_sNodeName;
     string m_sEliteRobotIP;
     string m_sPrintLevel;
     string m_sArmTrackPath;

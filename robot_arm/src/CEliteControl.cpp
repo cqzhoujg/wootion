@@ -9,7 +9,6 @@ CEliteControl::CEliteControl():
     m_bBusy(false),
     m_bIgnoreMove(false),
     m_bIsRecordReset(false),
-    m_nCheckReceiver(0),
     m_nDragStatus(DISABLE),
     m_nEliteState(ALARM),
     m_nTaskName(IDLE),
@@ -21,6 +20,8 @@ CEliteControl::CEliteControl():
     ros::NodeHandle PublicNodeHandle;
     ros::NodeHandle PrivateNodeHandle("~");
 
+    PrivateNodeHandle.param("node_name", m_sNodeName, ros::this_node::getName());
+    PrivateNodeHandle.param("check_receiver", m_nCheckReceiver, 0);
     PrivateNodeHandle.param("elite_ip", m_sEliteRobotIP, std::string("192.168.100.200"));
     PrivateNodeHandle.param("elite_port", m_nElitePort, 8055);
     PrivateNodeHandle.param("elt_speed", m_dEltSpeed, 10.0);
@@ -34,6 +35,8 @@ CEliteControl::CEliteControl():
     PublicNodeHandle.param("arm_heart", m_sHeartBeatTopic, std::string("arm_heart_beat"));
     PublicNodeHandle.param("arm_abnormal", m_sAbnormalTopic, std::string("arm_exception"));
 
+    ROS_INFO("[ros param] node_name:%s", m_sNodeName.c_str());
+    ROS_INFO("[ros param] check_receiver:%d", m_nCheckReceiver);
     ROS_INFO("[ros param] elite_ip:%s", m_sEliteRobotIP.c_str());
     ROS_INFO("[ros param] elite_port:%d",m_nElitePort);
     ROS_INFO("[ros param] elt_speed:%f",m_dEltSpeed);
@@ -328,7 +331,7 @@ void CEliteControl::UpdateEliteThreadFunc()
                 }
             }
 
-            if(m_bIsRecordReset && m_nTaskName != RESET && bIsWrite)
+            if(m_bIsRecordReset && m_nTaskName != RESET && m_nTaskName != ROTATE && bIsWrite)
             {
                 if(m_bWriteOrigin)
                 {
@@ -1291,7 +1294,7 @@ Others: void
 **************************************************/
 bool CEliteControl::ArmServiceFunc(wootion_msgs::ControlService::Request &Req, wootion_msgs::ControlService::Response &Resp)
 {
-    if (m_nCheckReceiver == 1 && Req.receiver != "robot_arm")
+    if (m_nCheckReceiver == 1 && Req.receiver != m_sNodeName)
     {
         ROS_INFO("[ArmServiceFunc] receiver is:%s, ignore",Req.receiver.c_str());
         return true;
@@ -1362,7 +1365,7 @@ Others: void
 **************************************************/
 void CEliteControl::ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &ArmCmd)
 {
-    if (m_nCheckReceiver == 1 && ArmCmd->receiver != "cloud_terrace")
+    if (m_nCheckReceiver == 1 && ArmCmd->receiver != m_sNodeName)
     {
         return;
     }
