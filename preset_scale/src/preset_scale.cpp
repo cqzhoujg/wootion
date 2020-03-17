@@ -335,7 +335,7 @@ bool PresetScale::SaveArmIni()
             return false;
         }
     }
-    else if(m_sExtraData == "0")
+    else
     {
         sArmOrbit = "null";
         if (!write_profile_string("arm", "arm_file", sArmOrbit.c_str(), m_sIniFile.c_str()))
