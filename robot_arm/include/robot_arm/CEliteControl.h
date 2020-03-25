@@ -208,6 +208,7 @@ private:
     int m_nCheckReceiver;
     int m_nDragStatus;
     int m_nTaskName;
+    int m_nTimeoutLen;
 
     bool m_bRecordDragTrack;
     bool m_bBusy;

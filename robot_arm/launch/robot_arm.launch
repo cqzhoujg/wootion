@@ -4,6 +4,7 @@
         <param name="check_receiver" value="0"/>
         <param name="elite_ip" value="192.168.100.201"/>
         <param name="elite_port" value="8055"/>
+        <param name="timeout_len" value="60"/>
         <param name="elt_speed" value="10"/>
         <param name="rotate_speed" value="5"/>
         <param name="rotate_limit_angle" value="30"/>

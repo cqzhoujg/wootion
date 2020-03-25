@@ -24,6 +24,7 @@ CEliteControl::CEliteControl():
     PrivateNodeHandle.param("check_receiver", m_nCheckReceiver, 0);
     PrivateNodeHandle.param("elite_ip", m_sEliteRobotIP, std::string("192.168.100.201"));
     PrivateNodeHandle.param("elite_port", m_nElitePort, 8055);
+    PrivateNodeHandle.param("timeout_len", m_nTimeoutLen, 60);
     PrivateNodeHandle.param("elt_speed", m_dEltSpeed, 10.0);
     PrivateNodeHandle.param("rotate_speed", m_dRotateSpeed, 5.0);
     PrivateNodeHandle.param("rotate_limit_angle", m_dRotateLimitAngle, 30.0);
@@ -39,6 +40,7 @@ CEliteControl::CEliteControl():
     ROS_INFO("[ros param] check_receiver:%d", m_nCheckReceiver);
     ROS_INFO("[ros param] elite_ip:%s", m_sEliteRobotIP.c_str());
     ROS_INFO("[ros param] elite_port:%d",m_nElitePort);
+    ROS_INFO("[ros param] timeout_len:%d",m_nTimeoutLen);
     ROS_INFO("[ros param] elt_speed:%f",m_dEltSpeed);
     ROS_INFO("[ros param] rotate_speed:%f",m_dRotateSpeed);
     ROS_INFO("[ros param] rotate_limit_angle:%f",m_dRotateLimitAngle);
@@ -142,7 +144,7 @@ bool CEliteControl::Init()
     //清除报警，3次重试。
     if(EliteClearAlarm() == -1)
     {
-        ROS_ERROR("[Init] sync elite motor status failed");
+        ROS_ERROR("[Init] clear elite alarm failed");
         return false;
     }
 
@@ -308,7 +310,7 @@ void CEliteControl::UpdateEliteThreadFunc()
 
                     __time_t pollInterval = (CurrentTime.tv_sec - m_tRecordDataTime.tv_sec) \
                                         +(CurrentTime.tv_nsec - m_tRecordDataTime.tv_nsec) / 1000000000;
-                    if(pollInterval > 180)
+                    if(pollInterval > m_nTimeoutLen*3)
                     {
                         m_bRecordDragTrack = false;
                         m_tRecordDataTime.tv_sec = 0;
@@ -691,10 +693,9 @@ int CEliteControl::EliteMultiPointMove(elt_robot_pos &targetPos, double dSpeed, 
 //    PrintJointData(targetPos, "targetPos");
 
     //对目标只做线性差值
-    while(ros::ok())
+    for(int i=0; i<6; i++)
     {
-        int nCount = 0;
-        for(int i=0; i<ROBOT_POSE_SIZE; i++)
+        while(ros::ok())
         {
             if(targetPos[i] - currentPos[i] >= 0)
             {
@@ -702,7 +703,6 @@ int CEliteControl::EliteMultiPointMove(elt_robot_pos &targetPos, double dSpeed, 
                 if(targetPosTemp[i] - targetPos[i] > 0.001)
                 {
                     targetPosTemp[i] = targetPos[i];
-                    nCount++;
                 }
             }
             else
@@ -711,24 +711,22 @@ int CEliteControl::EliteMultiPointMove(elt_robot_pos &targetPos, double dSpeed, 
                 if(targetPosTemp[i] - targetPos[i] < 0.001)
                 {
                     targetPosTemp[i] = targetPos[i];
-                    nCount++;
                 }
             }
-        }
 
-        ret = elt_add_waypoint( m_eltCtx, targetPosTemp, &err);
-//        PrintJointData(targetPosTemp, "EliteMultiPointMove");
+            ret = elt_add_waypoint( m_eltCtx, targetPosTemp, &err);
+//            PrintJointData(targetPosTemp, "EliteMultiPointMove");
 
-        if (ret != ELT_SUCCESS)
-        {
-            sErrMsg.append("elt add way point error");
-            ROS_ERROR("[EliteMultiPointMove] add way point err code: %d,err message: %s", err.code, err.err_msg);
-            return -1;
-        }
-        if(nCount == ROBOT_POSE_SIZE)
-        {
-            ROS_INFO("[EliteMultiPointMove] add way point done");
-            break;
+            if (ret != ELT_SUCCESS)
+            {
+                sErrMsg.append("elt add way point error");
+                ROS_ERROR("[EliteMultiPointMove] add way point err code: %d,err message: %s", err.code, err.err_msg);
+                return -1;
+            }
+            if(abs(targetPosTemp[i] - targetPos[i]) <= 0.0001)
+            {
+                break;
+            }
         }
     }
 
@@ -952,7 +950,7 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
 
     if(trackDeque.size() <= 1)
     {
-        sErrMsg = "the content of orbit file is null";
+        sErrMsg = "empty";
         ROS_INFO("[EliteRunDragTrack] %s,",sErrMsg.c_str());
         return -1;
     }
@@ -1009,19 +1007,21 @@ bool CEliteControl::ResetToOrigin(string &sOutput)
     ROS_INFO("[ResetToOrigin] start.");
     if(m_nEliteState == ALARM)
     {
-        elt_error err;
-        int nRet = elt_clear_alarm(m_eltCtx, 1, &err);
-
-        if (ELT_SUCCESS != nRet)
+        //清除报警，3次重试。
+        if(EliteClearAlarm() == -1)
         {
-            if(err.err_msg[0] != '\0')
-                sOutput.append(err.err_msg);
-            else
-                sOutput.append("elt clear alarm error");
-
-            ROS_ERROR("[ResetToOrigin] clear alarm failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
+            sOutput.append("elt clear alarm error");
+            ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
             return false;
         }
+
+        if(EliteSyncMotorStatus() == -1)
+        {
+            sOutput.append("sync elite motor status failed");
+            ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
+            return false;
+        }
+        this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
     if(m_bRecordDragTrack)
@@ -1075,10 +1075,22 @@ bool CEliteControl::EliteGotoOrigin(string &sOutput)
     std::unique_lock<std::mutex> Lock(m_ResetFileMutex);
     if(EliteRunDragTrack(m_sResetFile, m_dEltSpeed, REVERSE, sOutput) == -1)
     {
-        if(sOutput == "the content of orbit file is null")
+        if(sOutput == "empty")
         {
             if(EliteMultiPointMove(m_EltOriginPos, m_dEltSpeed, sOutput) == -1)
             {
+                ROS_ERROR("[EliteGotoOrigin]%s",sOutput.c_str());
+                return false;
+            }
+
+            if(!WaitForMotionStop(m_nTimeoutLen, sOutput))
+            {
+                ROS_ERROR("[EliteGotoOrigin]%s",sOutput.c_str());
+                return false;
+            }
+            if(!CheckOrigin(m_EliteCurrentPos))
+            {
+                sOutput = "reset motion done, but did not reach the origin";
                 ROS_ERROR("[EliteGotoOrigin]%s",sOutput.c_str());
                 return false;
             }
@@ -1095,13 +1107,30 @@ bool CEliteControl::EliteGotoOrigin(string &sOutput)
         ROS_ERROR("[EliteGotoOrigin] close reset file error:%s", m_sResetFile.c_str());
         exit(-1);
     }
-    if(m_ResetFile.OpenFile(m_sResetFile, O_CREAT | O_TRUNC | O_RDWR) == -1)
+
+    if(!WaitForMotionStop(m_nTimeoutLen, sOutput))
     {
-        ROS_ERROR("[EliteGotoOrigin] open reset file error:%s", m_sResetFile.c_str());
-        exit(-1);
+        ROS_ERROR("[EliteGotoOrigin]%s",sOutput.c_str());
+        return false;
     }
+    if(!CheckOrigin(m_EliteCurrentPos))
+    {
+        sOutput = "reset motion done, but did not reach the origin";
+        ROS_ERROR("[EliteGotoOrigin]%s",sOutput.c_str());
+        return false;
+    }
+    else
+    {
+        //清空复位轨迹文件
+        if(m_ResetFile.OpenFile(m_sResetFile, O_CREAT | O_TRUNC | O_RDWR) == -1)
+        {
+            ROS_ERROR("[EliteGotoOrigin] open reset file error:%s", m_sResetFile.c_str());
+            return false;
+        }
+        m_bWriteOrigin = true;
+    }
+
     Lock.unlock();
-    m_bWriteOrigin = true;
 
     return true;
 }
@@ -1468,34 +1497,6 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             return false;
         }
 
-        timespec m_tStartTime;
-        timespec_get(&m_tStartTime, TIME_UTC);
-
-        bool bRan = false;
-        while(m_nEliteState != STOP)
-        {
-            //机械臂执行拖拽轨迹超时检测
-            this_thread::sleep_for(std::chrono::milliseconds(1000));
-            bRan = true;
-
-            timespec CurrentTime;
-            timespec_get(&CurrentTime, TIME_UTC);
-
-            __time_t pollInterval = (CurrentTime.tv_sec - m_tStartTime.tv_sec) \
-                                    +(CurrentTime.tv_nsec - m_tStartTime.tv_nsec) / 1000000000;
-            if(pollInterval > 120)
-            {
-                sOutput = "record orbit reset timeout error";
-                ROS_WARN("[ArmOperation] %s", sOutput.c_str());
-                m_bIgnoreMove = false;
-                return false;
-            }
-        }
-        if(bRan)
-        {
-            this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-
         string sTrackFile = m_sArmTrackPath + m_sOrbitFileName;
         ROS_INFO("[ArmOperation] the orbit file is:%s",sTrackFile.c_str());
 
@@ -1550,12 +1551,6 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             return false;
         }
 
-        if(!WaitForMotionStop(20, sOutput))
-        {
-            m_bIgnoreMove = false;
-            return false;
-        }
-
         m_nTaskName = PLAY;
         if(bHasReset)
         {
@@ -1601,7 +1596,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             }
         }
 
-        if(!WaitForMotionStop(20, sOutput))
+        if(!WaitForMotionStop(m_nTimeoutLen, sOutput))
         {
             m_bIgnoreMove = false;
             return false;
@@ -1770,7 +1765,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             return false;
         }
 
-        if(!WaitForMotionStop(15, sOutput))
+        if(!WaitForMotionStop(m_nTimeoutLen, sOutput))
         {
             return false;
         }
@@ -1873,7 +1868,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
 
                 __time_t pollInterval = (CurrentTime.tv_sec - m_tStartTime.tv_sec) \
                                     +(CurrentTime.tv_nsec - m_tStartTime.tv_nsec) / 1000000000;
-                if(pollInterval > 20)
+                if(pollInterval > m_nTimeoutLen)
                 {
                     sOutput = "reset collision alarm timeout error";
                     ROS_WARN("[ArmOperation] %s", sOutput.c_str());
@@ -1889,13 +1884,6 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             m_bIgnoreMove = false;
             return false;
         }
-
-        if(!WaitForMotionStop(20, sOutput))
-        {
-            m_bIgnoreMove = false;
-            return false;
-        }
-
         m_sResetOrbitFile = "null";
         m_bIgnoreMove = false;
     }
@@ -1924,7 +1912,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             return false;
         }
 
-        if(!WaitForMotionStop(20, sOutput))
+        if(!WaitForMotionStop(m_nTimeoutLen, sOutput))
         {
             m_bIgnoreMove = false;
             return false;
