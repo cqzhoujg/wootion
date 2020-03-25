@@ -22,7 +22,7 @@ CEliteControl::CEliteControl():
 
     PrivateNodeHandle.param("node_name", m_sNodeName, ros::this_node::getName());
     PrivateNodeHandle.param("check_receiver", m_nCheckReceiver, 0);
-    PrivateNodeHandle.param("elite_ip", m_sEliteRobotIP, std::string("192.168.100.200"));
+    PrivateNodeHandle.param("elite_ip", m_sEliteRobotIP, std::string("192.168.100.201"));
     PrivateNodeHandle.param("elite_port", m_nElitePort, 8055);
     PrivateNodeHandle.param("elt_speed", m_dEltSpeed, 10.0);
     PrivateNodeHandle.param("rotate_speed", m_dRotateSpeed, 5.0);
