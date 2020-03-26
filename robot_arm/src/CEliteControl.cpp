@@ -11,6 +11,7 @@ CEliteControl::CEliteControl():
     m_bIsRecordReset(false),
     m_nDragStatus(DISABLE),
     m_nEliteState(ALARM),
+    m_nEliteMode(Remote),
     m_nTaskName(IDLE),
     m_sOrbitFileName("arm_orbit.txt"),
     m_sResetFile("arm_reset.txt"),
@@ -267,6 +268,13 @@ void CEliteControl::UpdateEliteThreadFunc()
             ROS_INFO("[UpdateEliteThreadFunc] get elite state failed");
         }
 
+        //获取elt控制模式
+        ret = elt_get_robot_mode(m_eltCtx, &m_nEliteMode, &err);
+        if (ELT_SUCCESS != ret)
+        {
+            ROS_INFO("[UpdateEliteThreadFunc] get elite mode failed");
+        }
+
         //获取elt各个轴的绝对位置信息
         if(GetElitePos(m_EliteCurrentPos) == -1)
         {
@@ -404,6 +412,11 @@ void CEliteControl::HeartBeatThreadFunc()
         m_sStatus = sStatus;
 
         ptAllItem.put("status", m_sStatus);
+
+        string sMode = "remote";
+        if(m_nEliteMode != Remote)
+            sMode = m_nEliteMode == Teach ? "teach" : "play";
+        ptAllItem.put("mode", sMode);
 
         //错误信息
         string sErrCode, sErrMsg;
@@ -1357,6 +1370,16 @@ bool CEliteControl::ArmServiceFunc(wootion_msgs::ControlService::Request &Req, w
         return true;
     }
 
+    if (m_nEliteMode != Remote && \
+            (Req.cmd == "record_orbit" || Req.cmd == "play_orbit" || Req.cmd == "rotate" ||\
+             Req.cmd == "set_orientation" || Req.cmd == "set_position" || Req.cmd == "reset"))
+    {
+        Resp.data = "mode error,the mode of robot arm is ";
+        m_nEliteMode == Teach ? Resp.data.append("teach") : Resp.data.append("play");
+        ROS_INFO("[ArmServiceFunc] %s",Resp.data.c_str());
+        return true;
+    }
+
     if (m_nEliteState == MOVING && \
             (Req.cmd == "record_orbit" || Req.cmd == "play_orbit" || Req.cmd == "rotate" ||\
              Req.cmd == "set_orientation" || Req.cmd == "set_position" || Req.cmd == "reset"))
@@ -1432,6 +1455,16 @@ void CEliteControl::ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &Arm
         ROS_INFO("[ArmCmdCallBack] robot arm is busy");
         ArmAck.data = "robot arm is busy";
         m_ArmAckPublisher.publish(ArmAck);
+        return;
+    }
+
+    if (m_nEliteMode != Remote && \
+            (ArmCmd->cmd == "record_orbit" || ArmCmd->cmd == "play_orbit" || ArmCmd->cmd == "rotate" ||\
+             ArmCmd->cmd == "set_orientation" || ArmCmd->cmd == "set_position" || ArmCmd->cmd == "reset"))
+    {
+        ArmAck.data = "mode error,the mode of robot arm is ";
+        m_nEliteMode == Teach ? ArmAck.data.append("teach") : ArmAck.data.append("play");
+        ROS_INFO("[ArmServiceFunc] %s",ArmAck.data.c_str());
         return;
     }
 

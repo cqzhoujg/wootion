@@ -209,6 +209,7 @@ private:
     int m_nDragStatus;
     int m_nTaskName;
     int m_nTimeoutLen;
+    int m_nEliteMode;
 
     bool m_bRecordDragTrack;
     bool m_bBusy;
