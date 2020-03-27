@@ -258,28 +258,45 @@ void CEliteControl::UpdateEliteThreadFunc()
 
     memset(EliteCurrentPos, 0, sizeof(EliteCurrentPos));
     memset(&m_EliteCurrentPos, 0, sizeof(m_EliteCurrentPos));
+    int nErrorTimes = 0;
 
     while(ros::ok())
     {
+        if(nErrorTimes >= 3)
+        {
+            ROS_ERROR("[UpdateEliteThreadFunc] process exit, get elite info failed, times=%d",nErrorTimes);
+            UnInit();
+            exit(-1);
+        }
         //获取elt工作状态
         ret = elt_get_robot_state(m_eltCtx, &m_nEliteState, &err);
         if (ELT_SUCCESS != ret)
         {
-            ROS_INFO("[UpdateEliteThreadFunc] get elite state failed");
+            ROS_WARN("[UpdateEliteThreadFunc] get elite state failed");
+            nErrorTimes++;
+            this_thread::sleep_for(std::chrono::milliseconds(200));
+            continue;
         }
 
         //获取elt控制模式
         ret = elt_get_robot_mode(m_eltCtx, &m_nEliteMode, &err);
         if (ELT_SUCCESS != ret)
         {
-            ROS_INFO("[UpdateEliteThreadFunc] get elite mode failed");
+            ROS_WARN("[UpdateEliteThreadFunc] get elite mode failed");
+            nErrorTimes++;
+            this_thread::sleep_for(std::chrono::milliseconds(200));
+            continue;
         }
 
         //获取elt各个轴的绝对位置信息
         if(GetElitePos(m_EliteCurrentPos) == -1)
         {
-            ROS_ERROR("[UpdateEliteThreadFunc] get elite current pos error");
+            ROS_WARN("[UpdateEliteThreadFunc] get elite current pos failed");
+            nErrorTimes++;
+            this_thread::sleep_for(std::chrono::milliseconds(200));
+            continue;
         }
+        nErrorTimes = 0;
 
         //每200ms记录一次轨迹文件
         if(nTimes == 0)
@@ -382,7 +399,6 @@ void CEliteControl::HeartBeatThreadFunc()
 {
     ROS_INFO("[HeartBeatThreadFunc] start");
     int nTimes = 0;
-    string sOldStatus = vsArmStatus[IDLE];
     while(ros::ok())
     {
         //心跳消息
@@ -479,17 +495,6 @@ void CEliteControl::HeartBeatThreadFunc()
             m_HeartBeatPublisher.publish(HeartBeatMsg);
             nTimes = 0;
         }
-
-        //play->idle  record->idle 或者回到原点时 更新 m_RotateOriginPos
-        if((sOldStatus == vsArmStatus[PLAY] || sOldStatus == vsArmStatus[RECORD]) && sStatus == vsArmStatus[IDLE])
-        {
-            memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
-        }
-        if(sOrigin == "true")
-        {
-            memcpy(m_RotateOriginPos, m_EltOriginPos, sizeof(m_RotateOriginPos));
-        }
-        sOldStatus = sStatus;
 
         //异常检测
         if(m_bRecordDragTrack && m_nEliteState == ALARM)
@@ -1018,6 +1023,8 @@ Others: void
 bool CEliteControl::ResetToOrigin(string &sOutput)
 {
     ROS_INFO("[ResetToOrigin] start.");
+    m_nTaskName = RESET;
+
     if(m_nEliteState == ALARM)
     {
         //清除报警，3次重试。
@@ -1025,6 +1032,7 @@ bool CEliteControl::ResetToOrigin(string &sOutput)
         {
             sOutput.append("elt clear alarm error");
             ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
+            m_nTaskName = IDLE;
             return false;
         }
 
@@ -1032,6 +1040,7 @@ bool CEliteControl::ResetToOrigin(string &sOutput)
         {
             sOutput.append("sync elite motor status failed");
             ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
+            m_nTaskName = IDLE;
             return false;
         }
         this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -1043,12 +1052,14 @@ bool CEliteControl::ResetToOrigin(string &sOutput)
         {
             sOutput = "disable drag failed";
             ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
+            m_nTaskName = IDLE;
             return false;
         }
         if(m_TrackFile.CloseFile() == -1)
         {
             sOutput = "close file failed";
             ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
+            m_nTaskName = IDLE;
             return false;
         }
         ROS_INFO("[ResetToOrigin] disable drag and close the orbit file");
@@ -1057,9 +1068,9 @@ bool CEliteControl::ResetToOrigin(string &sOutput)
     if(!EliteGotoOrigin(sOutput))
     {
         ROS_ERROR("[ResetToOrigin]%s",sOutput.c_str());
+        m_nTaskName = IDLE;
         return false;
     }
-    m_nTaskName = RESET;
 
     this_thread::sleep_for(std::chrono::milliseconds(1000));
     return true;
@@ -1572,6 +1583,9 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         }
         m_nTaskName = IDLE;
         ROS_INFO("[ArmOperation] disable drag and close the orbit file");
+
+        memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
+        ROS_INFO("[ArmOperation] update rotate origin\n");
     }
     else if(sCommand == "play_orbit")
     {
@@ -1637,6 +1651,9 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
 
         m_sResetOrbitFile = sTrackFile;
         m_bIgnoreMove = false;
+
+        memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
+        ROS_INFO("[ArmOperation] update rotate origin\n");
     }
     else if(sCommand == "rotate")
     {
@@ -1798,12 +1815,13 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
             return false;
         }
 
+        m_nTaskName = ROTATE;
+
         if(!WaitForMotionStop(m_nTimeoutLen, sOutput))
         {
             return false;
         }
 
-        m_nTaskName = ROTATE;
     }
     else if(sCommand == "move")
     {
@@ -1919,6 +1937,9 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
         }
         m_sResetOrbitFile = "null";
         m_bIgnoreMove = false;
+
+        memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
+        ROS_INFO("[ArmOperation] update rotate origin\n");
     }
     //机械臂1轴旋转180,镜头朝向相对化工机器人调转180.
     else if(sCommand == "turn_around")
