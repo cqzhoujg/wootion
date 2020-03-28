@@ -1162,54 +1162,64 @@ bool CEliteControl::EliteGotoOrigin(string &sOutput)
 /*************************************************
 Function: CEliteControl::EliteSyncMotorStatus
 Description: 同步机械臂数据
-Input: void
+Input: bool bSwitchStatusFirst,默认为true,是否首先进行一次同步后再进行判断
 Output:  1, 成功
         -1, 失败
 Others: void
 **************************************************/
-int CEliteControl::EliteSyncMotorStatus()
+int CEliteControl::EliteSyncMotorStatus(bool bSwitchStatusFirst)
 {
     //获取同步状态,返回1，表示机器人处于同步状态。 返回0，表示机器人处于未同步状态。
     elt_error err;
-    int nRet, nPowerStatus;
+    int nRet, nPowerStatus, nRetryTimes = ELT_FALSE;
 
     //同步伺服编码器数据
-    ROS_INFO("[EliteSyncMotorStatus] sync elt");
-    nRet = elt_sync_motor_status(m_eltCtx, &err);
-
-    if (ELT_SUCCESS != nRet)
+    if(bSwitchStatusFirst)
     {
-        ROS_INFO("[EliteSyncMotorStatus] sync motor failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
-        return -1;
-    }
+        ROS_INFO("[EliteSyncMotorStatus] sync elt");
+        nRet = elt_sync_motor_status(m_eltCtx, &err);
 
-    this_thread::sleep_for(std::chrono::milliseconds(1000));
-    nRet = elt_get_motor_status(m_eltCtx, &nPowerStatus, &err);
-
-    if (ELT_SUCCESS == nRet)
-    {
-        if(ELT_FALSE  == nPowerStatus)
+        if (ELT_SUCCESS != nRet)
         {
-            ROS_INFO("[EliteSyncMotorStatus] elt motor need sync.");
-
-            //同步伺服编码器数据
-            ROS_INFO("[EliteSyncMotorStatus] sync elt");
-            nRet = elt_sync_motor_status(m_eltCtx, &err);
-
-            if (ELT_SUCCESS != nRet)
-            {
-                ROS_INFO("[EliteSyncMotorStatus] sync motor failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
-                return -1;
-            }
+            ROS_INFO("[EliteSyncMotorStatus] sync motor failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
+            return -1;
         }
-        ROS_INFO("[EliteSyncMotorStatus] motor status is synced");
+
         this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
-    else
+
+    elt_get_motor_status(m_eltCtx, &nPowerStatus, &err);
+
+    while(nPowerStatus == ELT_FALSE && nRetryTimes < 3)
     {
-        ROS_INFO("[EliteSyncMotorStatus] get motor status failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
+        //同步伺服编码器数据
+        ROS_INFO("[EliteSyncMotorStatus] sync elt");
+        nRet = elt_sync_motor_status(m_eltCtx, &err);
+
+        if (ELT_SUCCESS != nRet)
+        {
+            ROS_INFO("[EliteSyncMotorStatus] sync motor failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
+            return -1;
+        }
+        this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+        nRet = elt_get_motor_status(m_eltCtx, &nPowerStatus, &err);
+        if (ELT_SUCCESS != nRet)
+        {
+            ROS_ERROR("[EliteSyncMotorStatus] get motor status failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
+            return -1;
+        }
+
+        ROS_INFO("[EliteSyncMotorStatus] nPowerStatus = %d",nPowerStatus);
+        nRetryTimes++;
+    }
+
+    if(nPowerStatus == ELT_FALSE)
+    {
+        ROS_ERROR("[EliteSyncMotorStatus] sync elt failed");
         return -1;
     }
+
     return 1;
 }
 
@@ -1251,7 +1261,11 @@ int CEliteControl::EliteClearAlarm()
         ROS_INFO("[EliteClearAlarm] nEltStatus = %d",nEltStatus);
         nRetryTimes++;
     }
-
+    if(nEltStatus != STOP)
+    {
+        ROS_ERROR("[EliteClearAlarm] clear alarm failed");
+        return -1;
+    }
     ROS_INFO("[EliteClearAlarm] elt status is normal");
     return 1;
 }
@@ -1529,6 +1543,17 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
     {
         sOutput = "recording the arm orbit";
         return false;
+    }
+
+    if(sCommand == "play_orbit" || sCommand == "rotate" || sCommand == "reset" || sCommand == "set_orientation" \
+        || sCommand == "set_position" || sCommand == "turn_around")
+    {
+        bool bSwitchStatusFirst = false;
+        if(EliteSyncMotorStatus(bSwitchStatusFirst) == -1)
+        {
+            sOutput = " sync elite motor status failed";
+            return false;
+        }
     }
 
     if(sCommand == "record_orbit")

@@ -179,7 +179,7 @@ public:
     int EliteRunDragTrack(const string &sFileName, double dSpeed, int nDirection, string &sErrMsg);
     bool ResetToOrigin(string &sOutput);
     bool EliteGotoOrigin(string &sOutput);
-    int EliteSyncMotorStatus();
+    int EliteSyncMotorStatus(bool bSwitchStatusFirst=true);
     int EliteClearAlarm();
     bool CheckOrigin(elt_robot_pos &pos_array);
     void PrintJointData(elt_robot_pos &pos_array, string sFunName);
