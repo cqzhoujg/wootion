@@ -91,23 +91,15 @@ CEliteControl::CEliteControl():
         exit(-1);
     }
 
-    try
-    {
-        m_pControlThread = new std::thread(std::bind(&CEliteControl::ControlThreadFunc, this));
-    }
-    catch (std::bad_alloc &exception)
-    {
-        ROS_ERROR("[CEliteControl] malloc motor control thread failed, %s", exception.what());
-        exit(-1);
-    }
-
-    this_thread::sleep_for(std::chrono::milliseconds(500));
+    this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     string sOutput;
     if(!ResetToOrigin(sOutput))
     {
         ROS_ERROR("[CEliteControl] %s",sOutput.c_str());
+        exit(-1);
     }
+    memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
 }
 
 /*************************************************
@@ -259,6 +251,7 @@ void CEliteControl::UpdateEliteThreadFunc()
     memset(EliteCurrentPos, 0, sizeof(EliteCurrentPos));
     memset(&m_EliteCurrentPos, 0, sizeof(m_EliteCurrentPos));
     int nErrorTimes = 0;
+    int nEltMode = Remote;
 
     while(ros::ok())
     {
@@ -296,7 +289,15 @@ void CEliteControl::UpdateEliteThreadFunc()
             this_thread::sleep_for(std::chrono::milliseconds(200));
             continue;
         }
+
         nErrorTimes = 0;
+        if(nEltMode != Remote && m_nEliteMode == Remote)
+        {
+            ROS_INFO("[UpdateEliteThreadFunc] elt mode changed ro remote, update the rotate origin");
+            memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
+        }
+
+        nEltMode = m_nEliteMode;
 
         //每200ms记录一次轨迹文件
         if(nTimes == 0)
@@ -514,68 +515,6 @@ void CEliteControl::HeartBeatThreadFunc()
         nTimes++;
         this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-}
-
-/*************************************************
-Function: CEliteControl::ControlThreadFunc
-Description: 自测试线程函数
-Input: void
-Output: void
-Others: void
-**************************************************/
-void CEliteControl::ControlThreadFunc()
-{
-    char c;
-    while(ros::ok())
-    {
-        cin >> c;
-        if(c == '\n')
-            continue;
-
-        if(c == 'q')
-        {
-            ROS_INFO("[ControlThreadFunc] process quit.");
-            exit(-1);
-        }
-        if(c == 's')
-        {
-            ROS_INFO("[ControlThreadFunc] stop.");
-            string sErr;
-            EliteStop(sErr);
-        }
-        if(c == 'e')
-        {
-            ROS_INFO("[ControlThreadFunc] enable elite drag.");
-            elt_error err;
-            int nRet = elt_set_servo_status(m_eltCtx, 0, &err);
-            if (ELT_SUCCESS != nRet)
-            {
-                ROS_INFO("[Init] set elt servo status failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
-                continue;
-            }
-            ROS_INFO("[ControlThreadFunc] turn elt servo off .");
-
-            this_thread::sleep_for(std::chrono::milliseconds(300));
-            EliteDrag(ENABLE);
-        }
-        else if(c =='p')
-        {
-            PrintJointData(m_EliteCurrentPos,"m_EliteCurrentPos");
-            ROS_INFO("[ControlThreadFunc]m_nEliteState=%d",m_nEliteState);
-        }
-        else if(c =='g')
-        {
-            ROS_INFO("[ControlThreadFunc] elt_run ");
-            elt_error err;
-            int nRet = elt_run(m_eltCtx , &err);
-            if (ELT_SUCCESS != nRet)
-            {
-                ROS_INFO("[Init] elt_run failed. nRet=%d, err.code=%d, err.msg=%s", nRet, err.code, err.err_msg);
-                continue;
-            }
-        }
-    }
-    this_thread::sleep_for(std::chrono::milliseconds(20));
 }
 
 /*************************************************
@@ -1371,7 +1310,7 @@ bool CEliteControl::ArmServiceFunc(wootion_msgs::ControlService::Request &Req, w
     Resp.ack = "failed";
     Resp.data.clear();
 
-    ROS_INFO("[ArmServiceFunc] request:%s, data:%s", Req.cmd.c_str(), Req.data.c_str());
+    ROS_INFO("[ArmServiceFunc] sender:%s, request:%s, data:%s", Req.sender.c_str(), Req.cmd.c_str(), Req.data.c_str());
 
     if ((m_nEliteState == EMERGENCY_STOP || m_nEliteState == ALARM) &&
         Req.cmd != "reset" && Req.cmd != "record_orbit" && Req.cmd != "play_orbit")
@@ -1449,7 +1388,7 @@ void CEliteControl::ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &Arm
 
     wootion_msgs::GeneralAck ArmAck;
 
-    ROS_INFO("[ArmCmdCallBack] cmd:%s, data:%s", ArmCmd->cmd.c_str(), ArmCmd->data.c_str());
+    ROS_INFO("[ArmCmdCallBack] sender:%s, cmd:%s, data:%s", ArmCmd->sender.c_str(), ArmCmd->cmd.c_str(), ArmCmd->data.c_str());
 
     ArmAck.header.stamp = ros::Time::now();
     ArmAck.sender = "robot_arm";

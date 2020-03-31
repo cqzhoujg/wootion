@@ -169,7 +169,6 @@ public:
     void UnInit();
     void UpdateEliteThreadFunc();
     void HeartBeatThreadFunc();
-    void ControlThreadFunc();
     int UpdateEltOrigin();
     int EliteJointMove(elt_robot_pos &targetPos, double dSpeed, string &sErr);
     int EliteMultiPointMove(elt_robot_pos &targetPos, double dSpeed, string &sErrMsg);
