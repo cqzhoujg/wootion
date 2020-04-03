@@ -10,5 +10,6 @@
         <param name="rotate_limit_angle" value="30"/>
         <param name="print_level" value="debug"/>
         <param name="track_path" value="/home/ros/track/"/>
+        <param name="p_level" value="7"/>
     </node>
 </launch>

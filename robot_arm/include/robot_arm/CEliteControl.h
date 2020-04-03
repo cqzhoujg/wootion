@@ -35,6 +35,7 @@
 #include "wootion_msgs/GeneralAck.h"
 #include "wootion_msgs/ControlService.h"
 #include "wootion_msgs/GeneralTopic.h"
+#include "wootion_msgs/RobotStatus.h"
 #include "CFileRW.h"
 
 using namespace std;
@@ -128,8 +129,8 @@ typedef enum _tagRotateType
 
 //大
 const static double AxisLimitAngle[12] = {
-    175.0,  175.0,  158.0,   58.0, 355.0,  175.0,
-   -175.0, -175.0, -158.0, -258.0,   5.0, -175.0
+    358.0,  358.0,  158.0,  358.0,  358.0,  358.0,
+   -358.0, -358.0, -158.0, -358.0, -358.0, -358.0
 };
 
 static vector<string> SplitString(const string &sInput, const string &sDelimiter)
@@ -180,12 +181,26 @@ public:
     bool EliteGotoOrigin(string &sOutput);
     int EliteSyncMotorStatus(bool bSwitchStatusFirst=true);
     int EliteClearAlarm();
+    int EliteOpenServo();
     bool CheckOrigin(elt_robot_pos &pos_array);
     void PrintJointData(elt_robot_pos &pos_array, string sFunName);
     bool WaitForMotionStop(int nTimeoutTime, string &sErr);
     bool ArmServiceFunc(wootion_msgs::ControlService::Request &Req, wootion_msgs::ControlService::Response &Resp);
     void ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &TerraceCmd);
+    void AgvStatusCallBack(const wootion_msgs::RobotStatus::ConstPtr &AgvStatus);
     bool ArmOperation(const std::string &sCommand, const std::string &sInput, std::string &sOutput);
+    bool RecordOrbit(std::string &sOutput);
+    bool StopOrbit(std::string &sOutput);
+    bool PlayOrbit(const std::string &sInput, std::string &sOutput);
+    bool Rotate(const std::string &sInput, std::string &sOutput);
+    bool StopRotate(std::string &sOutput);
+    bool GetOrientation(std::string &sOutput);
+    bool SetOrientation(const std::string &sInput, std::string &sOutput);
+    bool GetPosition(std::string &sOutput);
+    bool SetPosition(const std::string &sInput, std::string &sOutput);
+    bool Reset(std::string &sOutput);
+    bool TurnAround(std::string &sOutput);
+    bool GotoNewPos(const std::string &sInput, std::string &sOutput);
 
 private:
     string m_sNodeName;
@@ -201,6 +216,7 @@ private:
     string m_sResetFile;
     string m_sResetOrbitFile;
     string m_sStatus;
+    string m_sAgvStatusTopic;
 
     int m_nElitePort;
     int m_nEliteState;
@@ -209,12 +225,15 @@ private:
     int m_nTaskName;
     int m_nTimeoutLen;
     int m_nEliteMode;
+    int m_nSmoothnessLevel;
 
     bool m_bRecordDragTrack;
     bool m_bBusy;
     bool m_bIgnoreMove;
     bool m_bIsRecordReset;
     bool m_bWriteOrigin;
+    bool m_bEmeStop;
+    bool m_bArmInit;
 
     double m_dEltSpeed;//百分比
     double m_dRotateSpeed;//百分比
@@ -233,6 +252,7 @@ private:
     std::thread *m_pControlThread;
 
     ros::Subscriber m_ArmCmdSubscriber;
+    ros::Subscriber m_AgvStatusSubscriber;
     ros::Publisher m_ArmAckPublisher;
     ros::Publisher m_HeartBeatPublisher;
     ros::Publisher m_AbnormalPublisher;
