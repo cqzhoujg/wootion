@@ -166,10 +166,15 @@ public:
     CEliteControl();
     ~CEliteControl();
 
-    bool Init();
     void UnInit();
     void UpdateEliteThreadFunc();
     void HeartBeatThreadFunc();
+    void MonitorThreadFunc();
+    void ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &TerraceCmd);
+    void AgvStatusCallBack(const wootion_msgs::RobotStatus::ConstPtr &AgvStatus);
+    void LinearSmooth7(double *dSrc, double *dDest, int nLen);
+    void PrintJointData(elt_robot_pos &pos_array, string sFunName);
+
     int UpdateEltOrigin();
     int EliteJointMove(elt_robot_pos &targetPos, double dSpeed, string &sErr);
     int EliteMultiPointMove(elt_robot_pos &targetPos, double dSpeed, string &sErrMsg);
@@ -177,17 +182,16 @@ public:
     int EliteStop(string &sErr);
     int EliteDrag(int nCmd);
     int EliteRunDragTrack(const string &sFileName, double dSpeed, int nDirection, string &sErrMsg);
-    bool ResetToOrigin(string &sOutput);
-    bool EliteGotoOrigin(string &sOutput);
     int EliteSyncMotorStatus(bool bSwitchStatusFirst=true);
     int EliteClearAlarm();
     int EliteOpenServo();
+
+    bool Init();
+    bool ResetToOrigin(string &sOutput);
+    bool EliteGotoOrigin(string &sOutput);
     bool CheckOrigin(elt_robot_pos &pos_array);
-    void PrintJointData(elt_robot_pos &pos_array, string sFunName);
     bool WaitForMotionStop(int nTimeoutTime, string &sErr);
     bool ArmServiceFunc(wootion_msgs::ControlService::Request &Req, wootion_msgs::ControlService::Response &Resp);
-    void ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &TerraceCmd);
-    void AgvStatusCallBack(const wootion_msgs::RobotStatus::ConstPtr &AgvStatus);
     bool ArmOperation(const std::string &sCommand, const std::string &sInput, std::string &sOutput);
     bool RecordOrbit(std::string &sOutput);
     bool StopOrbit(std::string &sOutput);
@@ -237,7 +241,8 @@ private:
 
     double m_dEltSpeed;//百分比
     double m_dRotateSpeed;//百分比
-    double m_dRotateLimitAngle;//百分比
+    double m_dRotateLimitAngle;
+    double m_dOrbitStep;
 
     timespec m_tRecordDataTime;
 
@@ -247,9 +252,9 @@ private:
     elt_robot_pos m_EltOriginPos;
     std::deque<EltPos> m_dDragTrackDeque;
 
+    std::thread *m_pMonitorThread;
     std::thread *m_pEliteStatusThread;
     std::thread *m_pHeartBeatThread;
-    std::thread *m_pControlThread;
 
     ros::Subscriber m_ArmCmdSubscriber;
     ros::Subscriber m_AgvStatusSubscriber;

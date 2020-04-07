@@ -4,6 +4,8 @@
 
 #include "CEliteControl.h"
 
+extern bool bExit;
+
 CEliteControl::CEliteControl():
     m_bRecordDragTrack(false),
     m_bBusy(false),
@@ -29,11 +31,13 @@ CEliteControl::CEliteControl():
     PrivateNodeHandle.param("elite_port", m_nElitePort, 8055);
     PrivateNodeHandle.param("timeout_len", m_nTimeoutLen, 60);
     PrivateNodeHandle.param("p_level", m_nSmoothnessLevel, 7);
-    PrivateNodeHandle.param("elt_speed", m_dEltSpeed, 10.0);
+    PrivateNodeHandle.param("elt_speed", m_dEltSpeed, 25.0);
     PrivateNodeHandle.param("rotate_speed", m_dRotateSpeed, 5.0);
     PrivateNodeHandle.param("rotate_limit_angle", m_dRotateLimitAngle, 30.0);
     PrivateNodeHandle.param("print_level", m_sPrintLevel, std::string("debug"));
     PrivateNodeHandle.param("track_path", m_sArmTrackPath, std::string(getenv("HOME")).append("/track/"));
+    PrivateNodeHandle.param("orbit_step", m_dOrbitStep, 3.0);
+
     PublicNodeHandle.param("arm_service", m_sArmService, std::string("arm_control"));
     PublicNodeHandle.param("arm_cmd", m_sArmCmdTopic, std::string("arm_cmd"));
     PublicNodeHandle.param("arm_ack", m_sArmAckTopic, std::string("arm_ack"));
@@ -52,6 +56,8 @@ CEliteControl::CEliteControl():
     ROS_INFO("[ros param] rotate_limit_angle:%f",m_dRotateLimitAngle);
     ROS_INFO("[ros param] print_level:%s", m_sPrintLevel.c_str());
     ROS_INFO("[ros param] track_path:%s", m_sArmTrackPath.c_str());
+    ROS_INFO("[ros param] orbit_step:%f",m_dOrbitStep);
+
     ROS_INFO("[ros param] arm_service:%s", m_sArmService.c_str());
     ROS_INFO("[ros param] arm_cmd:%s", m_sArmCmdTopic.c_str());
     ROS_INFO("[ros param] arm_ack:%s", m_sArmAckTopic.c_str());
@@ -76,6 +82,7 @@ CEliteControl::CEliteControl():
     if(!Init())
     {
         ROS_ERROR("[CEliteControl] elite init failed");
+        UnInit();
         exit(-1);
     }
 
@@ -96,11 +103,23 @@ CEliteControl::CEliteControl():
 
     try
     {
+        m_pMonitorThread = new std::thread(std::bind(&CEliteControl::MonitorThreadFunc, this));
+    }
+    catch (std::bad_alloc &exception)
+    {
+        ROS_ERROR("[CEliteControl] malloc monitor thread failed, %s", exception.what());
+        UnInit();
+        exit(-1);
+    }
+
+    try
+    {
         m_pEliteStatusThread = new std::thread(std::bind(&CEliteControl::UpdateEliteThreadFunc, this));
     }
     catch (std::bad_alloc &exception)
     {
         ROS_ERROR("[CEliteControl] malloc update-elite thread failed, %s", exception.what());
+        UnInit();
         exit(-1);
     }
 
@@ -111,6 +130,7 @@ CEliteControl::CEliteControl():
     catch (std::bad_alloc &exception)
     {
         ROS_ERROR("[CEliteControl] malloc heart beat thread failed, %s", exception.what());
+        UnInit();
         exit(-1);
     }
 
@@ -122,10 +142,12 @@ CEliteControl::CEliteControl():
         if(!ResetToOrigin(sOutput))
         {
             ROS_ERROR("[CEliteControl] %s",sOutput.c_str());
+            UnInit();
             exit(-1);
         }
         memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
     }
+    ROS_INFO("[CEliteControl] done");
 }
 
 /*************************************************
@@ -241,22 +263,24 @@ Others: void
 void CEliteControl::UpdateEliteThreadFunc()
 {
     ROS_INFO("[UpdateEliteThreadFunc] start");
-    int ret, nTimes = 0;
+    int ret;
     elt_error err;
-    elt_robot_pos EliteCurrentPos;
+    elt_robot_pos OldRecordPos, LastPos;
     std::unique_lock<std::mutex> Lock(m_ResetFileMutex);
-    if(m_ResetFile.OpenFile(m_sResetFile, O_CREAT |O_RDWR) == -1)
+    if(m_ResetFile.OpenFile(m_sResetFile, O_CREAT | O_RDWR) == -1)
     {
         ROS_ERROR("[UpdateEliteThreadFunc] open reset file error:%s", m_sResetFile.c_str());
+        UnInit();
         exit(-1);
     }
     Lock.unlock();
     m_bWriteOrigin = true;
 
-    memset(EliteCurrentPos, 0, sizeof(EliteCurrentPos));
+    memset(OldRecordPos, 0, sizeof(OldRecordPos));
+    memset(&LastPos, 0, sizeof(LastPos));
     memset(&m_EliteCurrentPos, 0, sizeof(m_EliteCurrentPos));
     int nErrorTimes = 0;
-    int nEltMode = Remote;
+//    int nEltMode = Remote;
 
     while(ros::ok())
     {
@@ -297,101 +321,118 @@ void CEliteControl::UpdateEliteThreadFunc()
         }
 
         nErrorTimes = 0;
-        if(nEltMode != Remote && m_nEliteMode == Remote)
+//        if(nEltMode != Remote && m_nEliteMode == Remote)
+//        {
+//            ROS_INFO("[UpdateEliteThreadFunc] elt mode changed ro remote, update the rotate origin");
+//            memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
+//        }
+
+//        nEltMode = m_nEliteMode;
+
+        string sAxisData;
+        bool bIsWrite = false;
+        for(int i=0; i<ROBOT_POSE_SIZE; i++)
         {
-            ROS_INFO("[UpdateEliteThreadFunc] elt mode changed ro remote, update the rotate origin");
-            memcpy(m_RotateOriginPos, m_EliteCurrentPos, sizeof(m_RotateOriginPos));
+            //只有当角度差大于0.1时才将位置信息写入轨迹录制文件，剔除重复数据，剔除超限位数据
+            if((abs(m_EliteCurrentPos[i] - OldRecordPos[i]) > m_dOrbitStep) &&\
+                m_EliteCurrentPos[i] <= AxisLimitAngle[i] && m_EliteCurrentPos[i] >= AxisLimitAngle[i+6])
+            {
+                bIsWrite = true;
+            }
+
+            sAxisData.append(to_string(m_EliteCurrentPos[i]));
+            if(i != ROBOT_POSE_SIZE - 1)
+            {
+                sAxisData.append(" ");
+            }
+        }
+        sAxisData.append("\n");
+
+        if(CheckOrigin(LastPos) && !CheckOrigin(m_EliteCurrentPos))
+        {
+            m_bIsRecordReset = true;
         }
 
-        nEltMode = m_nEliteMode;
-
-        //每200ms记录一次轨迹文件
-        if(nTimes == 0)
+        if(m_bRecordDragTrack)
         {
-            string sAxisData;
-            bool bIsWrite = false;
-            for(int i=0; i<ROBOT_POSE_SIZE; i++)
+            //轨迹记录超时检测
+            if(m_tRecordDataTime.tv_sec != 0 && m_tRecordDataTime.tv_nsec != 0)
             {
-                //只有当角度差大于0.1时才将位置信息写入轨迹录制文件，剔除重复数据，剔除超限位数据
-                if((abs(m_EliteCurrentPos[i] - EliteCurrentPos[i]) > 0.1) &&\
-                    m_EliteCurrentPos[i] <= AxisLimitAngle[i] && m_EliteCurrentPos[i] >= AxisLimitAngle[i+6])
+                timespec CurrentTime;
+                timespec_get(&CurrentTime, TIME_UTC);
+
+                __time_t pollInterval = (CurrentTime.tv_sec - m_tRecordDataTime.tv_sec) \
+                                    +(CurrentTime.tv_nsec - m_tRecordDataTime.tv_nsec) / 1000000000;
+                if(pollInterval > m_nTimeoutLen*3)
                 {
-                    bIsWrite = true;
-                }
+                    m_bRecordDragTrack = false;
+                    m_tRecordDataTime.tv_sec = 0;
+                    m_tRecordDataTime.tv_nsec = 0;
+                    ROS_INFO("[UpdateEliteThreadFunc] record track time out,pollInterval=%ld s",pollInterval);
 
-                sAxisData.append(to_string(m_EliteCurrentPos[i]));
-                if(i != ROBOT_POSE_SIZE - 1)
-                {
-                    sAxisData.append(" ");
-                }
-            }
-            sAxisData.append("\n");
-
-            if(CheckOrigin(EliteCurrentPos) && !CheckOrigin(m_EliteCurrentPos))
-            {
-                m_bIsRecordReset = true;
-            }
-
-            if(m_bRecordDragTrack)
-            {
-                //轨迹记录超时检测
-                if(m_tRecordDataTime.tv_sec != 0 && m_tRecordDataTime.tv_nsec != 0)
-                {
-                    timespec CurrentTime;
-                    timespec_get(&CurrentTime, TIME_UTC);
-
-                    __time_t pollInterval = (CurrentTime.tv_sec - m_tRecordDataTime.tv_sec) \
-                                        +(CurrentTime.tv_nsec - m_tRecordDataTime.tv_nsec) / 1000000000;
-                    if(pollInterval > m_nTimeoutLen*3)
+                    if(EliteDrag(DISABLE) == -1)
                     {
-                        m_bRecordDragTrack = false;
-                        m_tRecordDataTime.tv_sec = 0;
-                        m_tRecordDataTime.tv_nsec = 0;
-                        ROS_INFO("[UpdateEliteThreadFunc] record track time out,pollInterval=%ld s",pollInterval);
-
-                        if(EliteDrag(DISABLE) == -1)
-                        {
-                            ROS_ERROR("[UpdateEliteThreadFunc] disable drag failed");
-                        }
-                        if(m_TrackFile.CloseFile() == -1)
-                        {
-                            ROS_ERROR("[UpdateEliteThreadFunc] close file failed");
-                        }
+                        ROS_ERROR("[UpdateEliteThreadFunc] disable drag failed");
+                    }
+                    if(m_TrackFile.CloseFile() == -1)
+                    {
+                        ROS_ERROR("[UpdateEliteThreadFunc] close file failed");
                     }
                 }
-                if(bIsWrite)
-                {
-                    m_TrackFile.Output(sAxisData);
-                }
             }
-
-            if(m_bIsRecordReset && m_nTaskName != RESET && m_nTaskName != ROTATE && bIsWrite)
+            if(bIsWrite)
             {
-                if(m_bWriteOrigin)
-                {
-                    string sOriginData;
-                    for(int i=0; i<ROBOT_POSE_SIZE; i++)
-                    {
-                        sOriginData.append(to_string(m_EltOriginPos[i]));
-                        if(i != ROBOT_POSE_SIZE - 1)
-                        {
-                            sOriginData.append(" ");
-                        }
-                    }
-                    sOriginData.append("\n");
-                    m_ResetFile.Output(sOriginData);
-                    m_bWriteOrigin = false;
-                }
-                m_ResetFile.Output(sAxisData);
+                m_TrackFile.Output(sAxisData);
+                memcpy(OldRecordPos, m_EliteCurrentPos, sizeof(OldRecordPos));
             }
-            memcpy(EliteCurrentPos, m_EliteCurrentPos, sizeof(EliteCurrentPos));
         }
 
-        //每200ms记录一次轨迹文件，改变周期可改变nTimes的变化阀值
-        if(++nTimes == 5)
-            nTimes = 0;
+        if(m_bIsRecordReset && m_nTaskName != RESET && m_nTaskName != ROTATE && bIsWrite)
+        {
+            if(m_bWriteOrigin)
+            {
+                string sOriginData;
+                for(int i=0; i<ROBOT_POSE_SIZE; i++)
+                {
+                    sOriginData.append(to_string(m_EltOriginPos[i]));
+                    if(i != ROBOT_POSE_SIZE - 1)
+                    {
+                        sOriginData.append(" ");
+                    }
+                }
+                sOriginData.append("\n");
+                m_ResetFile.Output(sOriginData);
+                m_bWriteOrigin = false;
+            }
+            m_ResetFile.Output(sAxisData);
+            memcpy(OldRecordPos, m_EliteCurrentPos, sizeof(OldRecordPos));
+        }
+
+        memcpy(LastPos, m_EliteCurrentPos, sizeof(LastPos));
 
         this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
+/*************************************************
+Function: CEliteControl::MonitorThreadFunc
+Description: 信号量监听线程函数
+Input: void
+Output: void
+Others: void
+**************************************************/
+void CEliteControl::MonitorThreadFunc()
+{
+    ROS_INFO("[HeartBeatThreadFunc] start");
+    while(ros::ok())
+    {
+        if(bExit)
+        {
+            printf("[MonitorThreadFunc] exit...\n");
+            UnInit();
+            exit(-1);
+        }
+        this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 }
 
@@ -619,7 +660,7 @@ int CEliteControl::EliteMultiPointMove(elt_robot_pos &targetPos, double dSpeed, 
     ROS_INFO("[EliteMultiPointMove] start");
     elt_error err;
     int ret;
-    double dStepValue = 1;
+    double dStepValue = m_dOrbitStep;
 
     //6轴运动限位检测，防止报警
     for(int i=0; i<6 ;i++)
@@ -881,7 +922,6 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
     ROS_INFO("[EliteRunDragTrack] opened file %s",sFileName.c_str());
 
     //设置轨迹路点运动的速度
-//    ret = elt_set_waypoint_max_rotate_speed( m_eltCtx, dSpeed,&err);
     ret = elt_set_waypoint_max_joint_speed( m_eltCtx, dSpeed,&err);
 
     if (ret != ELT_SUCCESS)
@@ -923,6 +963,27 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
     }
 
     //根据方向，调用elt库函数，将队列中的点添加的elt运动轨迹点当中
+    int nLen = int(trackDeque.size());
+
+    double dSrcData0[nLen], dSrcData1[nLen], dSrcData2[nLen], dSrcData3[nLen], dSrcData4[nLen], dSrcData5[nLen];
+    double dDesData0[nLen], dDesData1[nLen], dDesData2[nLen], dDesData3[nLen], dDesData4[nLen], dDesData5[nLen];
+
+    memset(dSrcData0, 0, sizeof(dSrcData0));
+    memset(dSrcData1, 0, sizeof(dSrcData0));
+    memset(dSrcData2, 0, sizeof(dSrcData0));
+    memset(dSrcData3, 0, sizeof(dSrcData0));
+    memset(dSrcData4, 0, sizeof(dSrcData0));
+    memset(dSrcData5, 0, sizeof(dSrcData0));
+
+    memset(dDesData0, 0, sizeof(dDesData0));
+    memset(dDesData1, 0, sizeof(dDesData0));
+    memset(dDesData2, 0, sizeof(dDesData0));
+    memset(dDesData3, 0, sizeof(dDesData0));
+    memset(dDesData4, 0, sizeof(dDesData0));
+    memset(dDesData5, 0, sizeof(dDesData0));
+
+    int nRow = 0;
+    //根据方向，调用elt库函数，将队列中的点添加的elt运动轨迹点当中
     while(!trackDeque.empty())
     {
         EltPos targetPosTemp;
@@ -931,14 +992,41 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
             targetPosTemp= trackDeque.front();
             trackDeque.pop_front();
         }
-        else if(nDirection == REVERSE)
+        else
         {
             targetPosTemp = trackDeque.back();
             trackDeque.pop_back();
         }
 
+        dSrcData0[nRow] = targetPosTemp.eltPos[0];
+        dSrcData1[nRow] = targetPosTemp.eltPos[1];
+        dSrcData2[nRow] = targetPosTemp.eltPos[2];
+        dSrcData3[nRow] = targetPosTemp.eltPos[3];
+        dSrcData4[nRow] = targetPosTemp.eltPos[4];
+        dSrcData5[nRow] = targetPosTemp.eltPos[5];
+
+        nRow++;
+    }
+
+    LinearSmooth7(dSrcData0, dDesData0, nLen);
+    LinearSmooth7(dSrcData1, dDesData1, nLen);
+    LinearSmooth7(dSrcData2, dDesData2, nLen);
+    LinearSmooth7(dSrcData3, dDesData3, nLen);
+    LinearSmooth7(dSrcData4, dDesData4, nLen);
+    LinearSmooth7(dSrcData5, dDesData5, nLen);
+
+    for(int i=0; i<nLen; i++)
+    {
+        EltPos targetPosTemp;
+
+        targetPosTemp.eltPos[0] = dDesData0[i];
+        targetPosTemp.eltPos[1] = dDesData1[i];
+        targetPosTemp.eltPos[2] = dDesData2[i];
+        targetPosTemp.eltPos[3] = dDesData3[i];
+        targetPosTemp.eltPos[4] = dDesData4[i];
+        targetPosTemp.eltPos[5] = dDesData5[i];
+
         ret = elt_add_waypoint( m_eltCtx, targetPosTemp.eltPos, &err);
-//        PrintJointData(targetPosTemp.eltPos, "EliteRunDragTrack");
         if (ret != ELT_SUCCESS)
         {
             sErrMsg = "add way point err";
@@ -948,9 +1036,8 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
     }
 
     //执行轨迹
-    int nSmoothnessLevel = 7;
     int nMoveType = 0;
-    ret = elt_track_move( m_eltCtx, nMoveType, nSmoothnessLevel, &err);
+    ret = elt_track_move( m_eltCtx, nMoveType, m_nSmoothnessLevel, &err);
 
     if (ret != ELT_SUCCESS)
     {
@@ -1087,6 +1174,7 @@ bool CEliteControl::EliteGotoOrigin(string &sOutput)
     if(m_ResetFile.CloseFile() == -1)
     {
         ROS_ERROR("[EliteGotoOrigin] close reset file error:%s", m_sResetFile.c_str());
+        UnInit();
         exit(-1);
     }
 
@@ -1705,6 +1793,7 @@ bool CEliteControl::StopOrbit(std::string &sOutput)
         ROS_ERROR("[StopOrbit]%s",sOutput.c_str());
         return false;
     }
+
     m_nTaskName = IDLE;
     ROS_INFO("[StopOrbit] disable drag and close the orbit file");
 
@@ -2306,9 +2395,57 @@ void CEliteControl::AgvStatusCallBack(const wootion_msgs::RobotStatus::ConstPtr 
     m_bEmeStop = bEmeStop;
 }
 
+
+/*************************************************
+Function: CEliteControl::LinearSmooth7
+Description: 数据光滑处理
+Input: double *dSrc,源数组首地址
+       double *dDest,目的数组首地址
+       int nLen,数组总长度
+Output: void
+Others: void
+**************************************************/
+void CEliteControl::LinearSmooth7(double *dSrc, double *dDest, int nLen)
+{
+    int i;
+    if ( nLen < 7 )
+    {
+        for ( i = 0; i <= nLen - 1; i++ )
+        {
+            dDest[i] = dSrc[i];
+        }
+    }
+    else
+    {
+        dDest[0] = dSrc[0];
+
+        dDest[1] = (5*dSrc[0] + 4*dSrc[1] + 3*dSrc[2] + 2*dSrc[3] + dSrc[4] - dSrc[6]) / 14.0;
+
+        dDest[2] = (7*dSrc[0] + 6*dSrc [1] + 5*dSrc[2] + 4*dSrc[3] + 3*dSrc[4] + 2*dSrc[5] + dSrc[6]) / 28.0;
+
+        for (i = 3; i <= nLen - 4; i++)
+        {
+            dDest[i] = (dSrc[i-3] + dSrc[i-2] + dSrc[i-1] + dSrc[i] + dSrc[i+1] + dSrc[i+2] + dSrc[i+3]) / 7.0;
+        }
+
+        dDest[nLen-3] = (7*dSrc[nLen-1] + 6*dSrc[nLen-2] + 5*dSrc[nLen-3] + 4*dSrc[nLen-4] + 3*dSrc[nLen-5] + \
+                         2*dSrc[nLen-6] + dSrc[nLen-7] ) / 28.0;
+
+        dDest[nLen-2] = (5*dSrc[nLen-1] + 4*dSrc[nLen-2] + 3*dSrc[nLen-3] + 2*dSrc[nLen-4] + dSrc[nLen-5] - \
+                           dSrc[nLen-7] ) / 14.0;
+
+        dDest[nLen-1] = dSrc[nLen-1];
+    }
+}
+
 CEliteControl::~CEliteControl()
 {
     UnInit();
-    delete m_pControlThread;
+    m_pEliteStatusThread->join();
+    m_pHeartBeatThread->join();
+    m_pMonitorThread->join();
+
     delete m_pEliteStatusThread;
+    delete m_pHeartBeatThread;
+    delete m_pMonitorThread;
 }

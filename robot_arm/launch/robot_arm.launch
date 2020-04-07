@@ -5,11 +5,12 @@
         <param name="elite_ip" value="192.168.100.201"/>
         <param name="elite_port" value="8055"/>
         <param name="timeout_len" value="60"/>
-        <param name="elt_speed" value="10"/>
+        <param name="elt_speed" value="25.0"/>
         <param name="rotate_speed" value="5"/>
         <param name="rotate_limit_angle" value="30"/>
         <param name="print_level" value="debug"/>
         <param name="track_path" value="/home/ros/track/"/>
         <param name="p_level" value="7"/>
+        <param name="orbit_step" value="3.0"/>
     </node>
 </launch>
