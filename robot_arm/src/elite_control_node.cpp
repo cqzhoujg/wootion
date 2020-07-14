@@ -20,12 +20,7 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "robot_arm");
 
     signal(SIGINT, SignalFunc);
-    signal(SIGABRT, SignalFunc);
-    signal(SIGTERM, SignalFunc);
-    signal(SIGPIPE, SignalFunc);
     signal(SIGKILL, SignalFunc);
-    signal(SIGSEGV, SignalFunc);
-    signal(SIGPWR, SignalFunc);
 
     CEliteControl elite_control;
 

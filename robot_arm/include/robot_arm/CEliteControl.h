@@ -22,6 +22,7 @@
 #include <sensor_msgs/Imu.h>
 #include <nav_msgs/Odometry.h>
 #include <tf/LinearMath/Matrix3x3.h>
+#include <boost/algorithm/string.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include "ros/ros.h"
@@ -133,33 +134,6 @@ const static double AxisLimitAngle[12] = {
    -358.0, -358.0, -158.0, -358.0, -358.0, -358.0
 };
 
-static vector<string> SplitString(const string &sInput, const string &sDelimiter)
-{
-    vector<string> vsResult;
-
-    if (sInput.empty())
-    {
-        return vsResult;
-    }
-
-    char *szString = new char[sInput.length() + 1] ;
-    strcpy(szString, sInput.c_str());
-
-    char *szDelimiter = new char[sDelimiter.length() + 1];
-    strcpy(szDelimiter, sDelimiter.c_str());
-
-    char *pChar = strtok(szString, szDelimiter);
-
-    while (pChar != nullptr)
-    {
-        string sSection = pChar;
-        vsResult.emplace_back(sSection);
-        pChar = strtok(nullptr, szDelimiter);
-    }
-
-    return vsResult;
-}
-
 class CEliteControl
 {
 public:
@@ -185,11 +159,12 @@ public:
     int EliteSyncMotorStatus(bool bSwitchStatusFirst=true);
     int EliteClearAlarm();
     int EliteOpenServo();
+    int CreateDataPath();
 
     bool Init();
     bool ResetToOrigin(string &sOutput);
     bool EliteGotoOrigin(string &sOutput);
-    bool CheckOrigin(elt_robot_pos &pos_array);
+    bool CheckOrigin(elt_robot_pos &pos_array, bool bCheckBase = false);
     bool WaitForMotionStop(int nTimeoutTime, string &sErr);
     bool ArmServiceFunc(wootion_msgs::ControlService::Request &Req, wootion_msgs::ControlService::Response &Resp);
     bool ArmOperation(const std::string &sCommand, const std::string &sInput, std::string &sOutput);
@@ -221,6 +196,7 @@ private:
     string m_sResetOrbitFile;
     string m_sStatus;
     string m_sAgvStatusTopic;
+    string m_sArmOrigin;
 
     int m_nElitePort;
     int m_nEliteState;

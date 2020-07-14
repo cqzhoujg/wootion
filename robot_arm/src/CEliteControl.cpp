@@ -37,6 +37,7 @@ CEliteControl::CEliteControl():
     PrivateNodeHandle.param("print_level", m_sPrintLevel, std::string("debug"));
     PrivateNodeHandle.param("track_path", m_sArmTrackPath, std::string(getenv("HOME")).append("/track/"));
     PrivateNodeHandle.param("orbit_step", m_dOrbitStep, 3.0);
+    PrivateNodeHandle.param("arm_origin", m_sArmOrigin, std::string("0,-150,130,-160,90,0"));
 
     PublicNodeHandle.param("arm_service", m_sArmService, std::string("arm_control"));
     PublicNodeHandle.param("arm_cmd", m_sArmCmdTopic, std::string("arm_cmd"));
@@ -56,7 +57,8 @@ CEliteControl::CEliteControl():
     ROS_INFO("[ros param] rotate_limit_angle:%f",m_dRotateLimitAngle);
     ROS_INFO("[ros param] print_level:%s", m_sPrintLevel.c_str());
     ROS_INFO("[ros param] track_path:%s", m_sArmTrackPath.c_str());
-    ROS_INFO("[ros param] orbit_step:%f",m_dOrbitStep);
+    ROS_INFO("[ros param] orbit_step:%f", m_dOrbitStep);
+    ROS_INFO("[ros param] arm_origin:%s", m_sArmOrigin.c_str());
 
     ROS_INFO("[ros param] arm_service:%s", m_sArmService.c_str());
     ROS_INFO("[ros param] arm_cmd:%s", m_sArmCmdTopic.c_str());
@@ -65,6 +67,11 @@ CEliteControl::CEliteControl():
     ROS_INFO("[ros param] arm_abnormal:%s", m_sAbnormalTopic.c_str());
     ROS_INFO("[ros param] agv_status:%s", m_sAgvStatusTopic.c_str());
 
+    if(-1 == CreateDataPath())
+    {
+        ROS_ERROR("[CEliteControl] create data path failed");
+        exit(-1);
+    }
 
     double dTimeout = 60.0;
     wootion_msgs::RobotStatus::ConstPtr AgvStatus = ros::topic::waitForMessage<wootion_msgs::RobotStatus>(m_sAgvStatusTopic, ros::Duration(dTimeout));
@@ -423,7 +430,7 @@ Others: void
 **************************************************/
 void CEliteControl::MonitorThreadFunc()
 {
-    ROS_INFO("[HeartBeatThreadFunc] start");
+    ROS_INFO("[MonitorThreadFunc] start");
     while(ros::ok())
     {
         if(bExit)
@@ -509,6 +516,19 @@ void CEliteControl::HeartBeatThreadFunc()
         }
         ptAllItem.put("origin", sOrigin);
 
+        //是否在原点,只判断前3个轴,用于前台检测是否有轨迹
+        string sBaseOrigin;
+        bool bCheckBaseOrigin = true;
+        if(CheckOrigin(m_EliteCurrentPos, bCheckBaseOrigin))
+        {
+            sBaseOrigin = "true";
+        }
+        else
+        {
+            sBaseOrigin = "false";
+        }
+        ptAllItem.put("base_origin", sBaseOrigin);
+
         //是否有轨迹
         string sOrbitFileExist;
         if(access((m_sArmTrackPath + m_sOrbitFileName).c_str(), 0) == 0 || access(m_sResetOrbitFile.c_str(), 0) == 0)
@@ -575,24 +595,19 @@ Others: void
 int CEliteControl::UpdateEltOrigin()
 {
     ROS_INFO("[UpdateEltOrigin] start");
-    string sFileName = m_sArmTrackPath + "arm_origin.txt";
-    ifstream originFile;
+    vector<string> vCmdList;
+    boost::split(vCmdList, m_sArmOrigin, boost::is_any_of(","), boost::token_compress_on);
 
-    //打开轨迹文件
-    originFile.open(sFileName.c_str(), ios::out);
-    if (!originFile.is_open())
+    if(vCmdList.size() < 6)
     {
-        ROS_ERROR("[EliteRunDragTrack] file cannot open,file:%s",sFileName.c_str());
+        ROS_ERROR("[EliteRunDragTrack] arm origin error:%s", m_sArmOrigin.c_str());
         return -1;
     }
-
-    while (!originFile.eof())
+    else
     {
-        EltPos targetPos;
-        memset(&targetPos, 0, sizeof(targetPos));
         for(int i=0; i<ROBOT_POSE_SIZE; i++)
         {
-            originFile >> m_EltOriginPos[i];
+            m_EltOriginPos[i] = stod(vCmdList[i]);
         }
     }
     PrintJointData(m_EltOriginPos, "UpdateEltOrigin");
@@ -1376,10 +1391,12 @@ Input: elt_robot_pos &pos_array, 位置信息数组
 Output: true or false
 Others: void
 **************************************************/
-bool CEliteControl::CheckOrigin(elt_robot_pos &pos_array)
+bool CEliteControl::CheckOrigin(elt_robot_pos &pos_array, bool bCheckBase)
 {
     int nOrigin = 0;
-    for(int i=0; i<6; i++)
+    int nBaseOriginAxisNum = 3, nArmOriginAxisNum = 6;
+    int nAxisNum = bCheckBase ? nBaseOriginAxisNum : nArmOriginAxisNum;
+    for(int i=0; i<nAxisNum; i++)
     {
         if(abs(pos_array[i] - m_EltOriginPos[i]) < 0.1)
         {
@@ -1387,7 +1404,7 @@ bool CEliteControl::CheckOrigin(elt_robot_pos &pos_array)
         }
     }
 
-    return (nOrigin == 6);
+    return (bCheckBase ? nOrigin == nBaseOriginAxisNum : nOrigin == nArmOriginAxisNum);
 }
 
 /*************************************************
@@ -1829,7 +1846,8 @@ bool CEliteControl::PlayOrbit(const std::string &sInput, std::string &sOutput)
     }
 
     string sTrackFile, sDirection;
-    vector<string> vCmdList = SplitString(sInput, ",");
+    vector<string> vCmdList;
+    boost::split(vCmdList, sInput, boost::is_any_of(","), boost::token_compress_on);
 
     if(vCmdList.size() == 1)
     {
@@ -1897,7 +1915,8 @@ bool CEliteControl::Rotate(const std::string &sInput, std::string &sOutput)
     std::string sPitchAngle;
     std::string sRollAngle;
 
-    vector<string> vCmdList = SplitString(sInput, ",");
+    vector<string> vCmdList;
+    boost::split(vCmdList, sInput, boost::is_any_of(","), boost::token_compress_on);
 
     if (vCmdList.size() < 4)
     {
@@ -2042,7 +2061,8 @@ Others: void
 **************************************************/
 bool CEliteControl::SetOrientation(const std::string &sInput, std::string &sOutput)
 {
-    vector<string> vCmdList = SplitString(sInput, ",");
+    vector<string> vCmdList;
+    boost::split(vCmdList, sInput, boost::is_any_of(","), boost::token_compress_on);
 
     if (vCmdList.size() < 3)
     {
@@ -2132,7 +2152,8 @@ bool CEliteControl::SetPosition(const std::string &sInput, std::string &sOutput)
     std::string sPosY;
     std::string sPosZ;
 
-    vector<string> vCmdList = SplitString(sInput, ",");
+    vector<string> vCmdList;
+    boost::split(vCmdList, sInput, boost::is_any_of(","), boost::token_compress_on);
 
     if (vCmdList.size() < 3)
     {
@@ -2292,8 +2313,8 @@ Others: void
 **************************************************/
 bool CEliteControl::GotoNewPos(const std::string &sInput, std::string &sOutput)
 {
-
-    vector<string> vCmdList = SplitString(sInput, ",");
+    vector<string> vCmdList;
+    boost::split(vCmdList, sInput, boost::is_any_of(","), boost::token_compress_on);
 
     if (vCmdList.size() < 7)
     {
@@ -2395,7 +2416,6 @@ void CEliteControl::AgvStatusCallBack(const wootion_msgs::RobotStatus::ConstPtr 
     m_bEmeStop = bEmeStop;
 }
 
-
 /*************************************************
 Function: CEliteControl::LinearSmooth7
 Description: 数据光滑处理
@@ -2436,6 +2456,35 @@ void CEliteControl::LinearSmooth7(double *dSrc, double *dDest, int nLen)
 
         dDest[nLen-1] = dSrc[nLen-1];
     }
+}
+
+/*************************************************
+Function: CEliteControl::CreateDataPath
+Description: 创建轨迹数据的文件夹
+Input: void
+Output: 1, 成功
+       -1, 失败
+Others: void
+**************************************************/
+int CEliteControl::CreateDataPath()
+{
+    string sCmd = "mkdir -p ";
+    sCmd.append(m_sArmTrackPath);
+    int nStatus = system(sCmd.c_str());
+    if(-1 == nStatus)
+    {
+        ROS_ERROR("[CreateDataPath] create data path failed, system error");
+        return -1;
+    }
+    else
+    {
+        if(0 == int(WIFEXITED(nStatus)))
+        {
+            ROS_ERROR("[CreateDataPath] create data path failed, run shell error, exit code:%d", WIFEXITED(nStatus));
+            return -1;
+        }
+    }
+    return 1;
 }
 
 CEliteControl::~CEliteControl()
