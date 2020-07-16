@@ -39,6 +39,7 @@ CEliteControl::CEliteControl():
     PrivateNodeHandle.param("orbit_step", m_dOrbitStep, 3.0);
     PrivateNodeHandle.param("arm_origin", m_sArmOrigin, std::string("0,-150,130,-160,90,0"));
     PrivateNodeHandle.param("debug_teach", m_nDebugTeach, 0);
+    PrivateNodeHandle.param("filter_value", m_dFilterValue, 20.0);
 
     PublicNodeHandle.param("arm_service", m_sArmService, std::string("arm_control"));
     PublicNodeHandle.param("arm_cmd", m_sArmCmdTopic, std::string("arm_cmd"));
@@ -61,6 +62,7 @@ CEliteControl::CEliteControl():
     ROS_INFO("[ros param] orbit_step:%f", m_dOrbitStep);
     ROS_INFO("[ros param] arm_origin:%s", m_sArmOrigin.c_str());
     ROS_INFO("[ros param] debug_teach:%d", m_nDebugTeach);
+    ROS_INFO("[ros param] filter_value:%f", m_dFilterValue);
 
     ROS_INFO("[ros param] arm_service:%s", m_sArmService.c_str());
     ROS_INFO("[ros param] arm_cmd:%s", m_sArmCmdTopic.c_str());
@@ -1016,6 +1018,9 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
         ROS_INFO("[EliteRunDragTrack] reset orbit file is empty");
         return -1;
     }
+
+    //剔除机械臂bug引入的异常错误点
+    RemoveErrPoints(trackDeque);
 
     //根据方向，调用elt库函数，将队列中的点添加的elt运动轨迹点当中
     int nLen = int(trackDeque.size());
@@ -2678,6 +2683,55 @@ int CEliteControl::CreateDataPath()
         }
     }
     return 1;
+}
+
+/*************************************************
+Function: CEliteControl::RemoveErrPoints
+Description: 机械臂bug,插入轨迹是会偶发出现异常的0.0 90.0 -90.0等异常点
+Input: void
+Output: 1, 成功
+       -1, 失败
+Others: void
+**************************************************/
+void CEliteControl::RemoveErrPoints(deque<EltPos> &trackDeque)
+{
+    deque<EltPos>::iterator iter;
+    double dMinValue = 0.000001;
+    int nCount = 0;
+
+    for( iter = trackDeque.begin(); iter != trackDeque.end(); )
+    {
+        bool bErase = false;
+        EltPos PreEltPos = (nCount==0) ? trackDeque[nCount] : trackDeque[nCount-1];
+        EltPos NextEltPos = (nCount==trackDeque.size()-1) ? trackDeque[nCount] : trackDeque[nCount+1];
+
+        for(int i=0; i<6; i++)
+        {
+            if(abs(iter->eltPos[i]) <= dMinValue || (abs(abs(iter->eltPos[i]) - 90.0) <= dMinValue))
+            {
+                if(abs(iter->eltPos[i] - PreEltPos.eltPos[i]) > m_dFilterValue || \
+                   abs(iter->eltPos[i] - NextEltPos.eltPos[i]) > m_dFilterValue)
+                {
+                    bErase = true;
+                    break;
+                }
+            }
+        }
+
+        if(bErase)
+        {
+            string sEraseData;
+            for(int i=0; i<6; i++)
+            {
+                sEraseData.append(to_string(iter->eltPos[i])).append(" ");
+            }
+            ROS_WARN("[RemoveErrPoints] orbit exist error point:%s", sEraseData.c_str());
+            trackDeque.erase(iter);
+        }
+
+        iter++;
+        nCount++;
+    }
 }
 
 CEliteControl::~CEliteControl()

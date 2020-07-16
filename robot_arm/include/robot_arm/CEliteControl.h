@@ -152,6 +152,7 @@ public:
     void AgvStatusCallBack(const wootion_msgs::RobotStatus::ConstPtr &AgvStatus);
     void LinearSmooth7(double *dSrc, double *dDest, int nLen);
     void PrintJointData(elt_robot_pos &pos_array, string sFunName);
+    void RemoveErrPoints(deque<EltPos> &trackDeque);
 
     int UpdateEltOrigin();
     int EliteJointMove(elt_robot_pos &targetPos, double dSpeed, string &sErr);
@@ -227,6 +228,7 @@ private:
     double m_dRotateSpeed;//百分比
     double m_dRotateLimitAngle;
     double m_dOrbitStep;
+    double m_dFilterValue;
 
     timespec m_tRecordDataTime;
 
