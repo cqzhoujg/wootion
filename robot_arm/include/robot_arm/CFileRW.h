@@ -15,6 +15,7 @@ Description: CFileRW
 #include <fcntl.h>
 #include <unistd.h>
 #include <ros/ros.h>
+#include <fcntl.h>
 
 
 using namespace std;
@@ -84,6 +85,7 @@ public:
         {
             ROS_ERROR("[CFileRW] int write length error, nRetLen = %d, nLength=%d", nRetLen, nLength);
         }
+        fsync(m_fp);
         lock.unlock();
     }
     void Output(float Value)
@@ -102,6 +104,7 @@ public:
         {
             ROS_ERROR("[CFileRW] float write length error, nRetLen = %d, nLength=%d", nRetLen, nLength);
         }
+        fsync(m_fp);
         lock.unlock();
     }
     void Output(double Value)
@@ -120,6 +123,7 @@ public:
         {
             ROS_ERROR("[CFileRW] double write length error, nRetLen = %d, nLength=%d", nRetLen, nLength);
         }
+        fsync(m_fp);
         lock.unlock();
     }
 
@@ -139,6 +143,7 @@ public:
         {
             ROS_ERROR("[CFileRW] char write length error, nRetLen = %d, nLength=%d", nRetLen, nLength);
         }
+        fsync(m_fp);
         lock.unlock();
     }
     void Output(string &strOutput)
@@ -155,6 +160,7 @@ public:
         {
             ROS_ERROR("[CFileRW] string write length error, nRetLen = %d, nLength=%d", nRetLen, nLength);
         }
+        fsync(m_fp);
         lock.unlock();
     }
 

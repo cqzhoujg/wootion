@@ -38,6 +38,7 @@ CEliteControl::CEliteControl():
     PrivateNodeHandle.param("track_path", m_sArmTrackPath, std::string(getenv("HOME")).append("/track/"));
     PrivateNodeHandle.param("orbit_step", m_dOrbitStep, 3.0);
     PrivateNodeHandle.param("arm_origin", m_sArmOrigin, std::string("0,-150,130,-160,90,0"));
+    PrivateNodeHandle.param("debug_teach", m_nDebugTeach, 0);
 
     PublicNodeHandle.param("arm_service", m_sArmService, std::string("arm_control"));
     PublicNodeHandle.param("arm_cmd", m_sArmCmdTopic, std::string("arm_cmd"));
@@ -59,6 +60,7 @@ CEliteControl::CEliteControl():
     ROS_INFO("[ros param] track_path:%s", m_sArmTrackPath.c_str());
     ROS_INFO("[ros param] orbit_step:%f", m_dOrbitStep);
     ROS_INFO("[ros param] arm_origin:%s", m_sArmOrigin.c_str());
+    ROS_INFO("[ros param] debug_teach:%d", m_nDebugTeach);
 
     ROS_INFO("[ros param] arm_service:%s", m_sArmService.c_str());
     ROS_INFO("[ros param] arm_cmd:%s", m_sArmCmdTopic.c_str());
@@ -454,12 +456,15 @@ void CEliteControl::HeartBeatThreadFunc()
 {
     ROS_INFO("[HeartBeatThreadFunc] start");
     int nTimes = 0;
+    string sPreOrigin = "true";
+
     while(ros::ok())
     {
         //心跳消息
         wootion_msgs::GeneralTopic HeartBeatMsg;
         boost::property_tree::ptree ptAllItem;
         bool bStatusChanged = false;
+        bool bOriginStatusChanged = false;
 
         HeartBeatMsg.header.stamp = ros::Time::now();
         HeartBeatMsg.sender = "robot_arm";
@@ -487,6 +492,10 @@ void CEliteControl::HeartBeatThreadFunc()
         string sMode = "remote";
         if(m_nEliteMode != Remote)
             sMode = m_nEliteMode == Teach ? "teach" : "play";
+        if(1 == m_nDebugTeach)
+        {
+            sMode = "teach";
+        }
         ptAllItem.put("mode", sMode);
 
         //错误信息
@@ -514,7 +523,11 @@ void CEliteControl::HeartBeatThreadFunc()
         {
             sOrigin = "false";
         }
+        if(sPreOrigin != sOrigin)
+            bOriginStatusChanged = true;
+
         ptAllItem.put("origin", sOrigin);
+        sPreOrigin = sOrigin;
 
         //是否在原点,只判断前3个轴,用于前台检测是否有轨迹
         string sBaseOrigin;
@@ -558,7 +571,7 @@ void CEliteControl::HeartBeatThreadFunc()
         boost::property_tree::write_json(ssStream, ptAllItem);
         HeartBeatMsg.data = ssStream.str();
 
-        if(10 == nTimes || bStatusChanged)
+        if(20 == nTimes || bStatusChanged || bOriginStatusChanged)
         {
             m_HeartBeatPublisher.publish(HeartBeatMsg);
             nTimes = 0;
@@ -580,7 +593,7 @@ void CEliteControl::HeartBeatThreadFunc()
         }
 
         nTimes++;
-        this_thread::sleep_for(std::chrono::milliseconds(100));
+        this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
 
@@ -912,11 +925,12 @@ Input: string &sFileName 轨迹文件名称
         double dSpeed, 运动速度
         int nDirection, 播放轨迹的方向
         string &sErrMsg, 播放失败的反馈信息
+        string sPlayFirstAxis, 是否播放第一轴
 Output:  1, 成功
         -1, 失败
 Others: void
 **************************************************/
-int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int nDirection, string &sErrMsg)
+int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int nDirection, string &sErrMsg, string sPlayFirstAxis)
 {
     ROS_INFO("[EliteRunDragTrack] start");
     elt_error err;
@@ -924,7 +938,7 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
     ifstream trackFile;
 
     //打开轨迹文件
-    trackFile.open(sFileName.c_str(), ios::out);
+    trackFile.open(sFileName.c_str(), ios::in);
     if (!trackFile.is_open())
     {
         trackFile.close();
@@ -956,19 +970,45 @@ int CEliteControl::EliteRunDragTrack(const string &sFileName, double dSpeed, int
     }
 
     //将轨迹文件读取到双向队列当中
+    EltPos prePos;
+    memset(&prePos, 0, sizeof(prePos));
+
     deque<EltPos> trackDeque;
     while (!trackFile.eof())
     {
         EltPos targetPos;
         memset(&targetPos, 0, sizeof(targetPos));
+
         for(int i=0; i< ROBOT_POSE_SIZE; i++)
         {
             trackFile >> targetPos.eltPos[i];
         }
-        trackDeque.push_back(targetPos);
+
+        if(sPlayFirstAxis == "0")
+        {
+            targetPos.eltPos[0] = m_EliteCurrentPos[0];
+        }
+
+        int bValid = false;
+        for(int i=0; i<6; i++)
+        {
+            if(abs(prePos.eltPos[i] - targetPos.eltPos[i]) > 0.1)
+            {
+                bValid = true;
+                break;
+            }
+        }
+
+        if(bValid)
+        {
+            trackDeque.push_back(targetPos);
+            memcpy(&(prePos.eltPos[0]), &(targetPos.eltPos[0]), sizeof(prePos.eltPos));
+        }
     }
     trackFile.close();
-    trackDeque.pop_back();
+
+    if(trackDeque.size() > 1)//读取时会重复读取最后一行
+        trackDeque.pop_back();
 
     if(trackDeque.size() <= 1)
     {
@@ -1156,6 +1196,13 @@ bool CEliteControl::EliteGotoOrigin(string &sOutput)
     m_bIsRecordReset = false;
 
     std::unique_lock<std::mutex> Lock(m_ResetFileMutex);
+    if(m_ResetFile.CloseFile() == -1)
+    {
+        ROS_ERROR("[EliteGotoOrigin] close reset file error:%s", m_sResetFile.c_str());
+        UnInit();
+        exit(-1);
+    }
+
     if(EliteRunDragTrack(m_sResetFile, m_dEltSpeed, REVERSE, sOutput) == -1)
     {
         if(sOutput == "empty")
@@ -1186,12 +1233,7 @@ bool CEliteControl::EliteGotoOrigin(string &sOutput)
         }
 
     }
-    if(m_ResetFile.CloseFile() == -1)
-    {
-        ROS_ERROR("[EliteGotoOrigin] close reset file error:%s", m_sResetFile.c_str());
-        UnInit();
-        exit(-1);
-    }
+
 
     if(!WaitForMotionStop(m_nTimeoutLen, sOutput))
     {
@@ -1513,7 +1555,7 @@ bool CEliteControl::ArmServiceFunc(wootion_msgs::ControlService::Request &Req, w
 
     if (m_nEliteMode != Remote && \
             (Req.cmd == "record_orbit" || Req.cmd == "play_orbit" || Req.cmd == "rotate" ||\
-             Req.cmd == "set_orientation" || Req.cmd == "set_position" || Req.cmd == "reset"))
+             Req.cmd == "set_orientation" || Req.cmd == "set_yaw_angle" || Req.cmd == "set_position" || Req.cmd == "reset"))
     {
         Resp.data = "mode error,the mode of robot arm is ";
         m_nEliteMode == Teach ? Resp.data.append("teach") : Resp.data.append("play");
@@ -1523,7 +1565,7 @@ bool CEliteControl::ArmServiceFunc(wootion_msgs::ControlService::Request &Req, w
 
     if (m_nEliteState == MOVING && \
             (Req.cmd == "record_orbit" || Req.cmd == "play_orbit" || Req.cmd == "rotate" ||\
-             Req.cmd == "set_orientation" || Req.cmd == "set_position" || Req.cmd == "reset"))
+             Req.cmd == "set_orientation" || Req.cmd == "set_yaw_angle" || Req.cmd == "set_position" || Req.cmd == "reset"))
     {
         ROS_INFO("[ArmServiceFunc] robot arm is moving");
         Resp.data = "robot arm is moving";
@@ -1532,7 +1574,7 @@ bool CEliteControl::ArmServiceFunc(wootion_msgs::ControlService::Request &Req, w
 
     if (m_bRecordDragTrack && m_nEliteState != ALARM &&\
             (Req.cmd == "record_orbit" || Req.cmd == "play_orbit" || Req.cmd == "rotate" ||\
-             Req.cmd == "set_orientation" || Req.cmd == "set_position" || Req.cmd == "reset"))
+             Req.cmd == "set_orientation" || Req.cmd == "set_yaw_angle" || Req.cmd == "set_position" || Req.cmd == "reset"))
     {
         ROS_INFO("[ArmServiceFunc] robot arm is dragging");
         Resp.data = "robot arm is dragging";
@@ -1601,7 +1643,7 @@ void CEliteControl::ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &Arm
 
     if (m_nEliteMode != Remote && \
             (ArmCmd->cmd == "record_orbit" || ArmCmd->cmd == "play_orbit" || ArmCmd->cmd == "rotate" ||\
-             ArmCmd->cmd == "set_orientation" || ArmCmd->cmd == "set_position" || ArmCmd->cmd == "reset"))
+             ArmCmd->cmd == "set_orientation" || ArmCmd->cmd == "set_yaw_angle" || ArmCmd->cmd == "set_position" || ArmCmd->cmd == "reset"))
     {
         ArmAck.data = "mode error,the mode of robot arm is ";
         m_nEliteMode == Teach ? ArmAck.data.append("teach") : ArmAck.data.append("play");
@@ -1611,7 +1653,7 @@ void CEliteControl::ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &Arm
 
     if (m_nEliteState == MOVING && \
             (ArmCmd->cmd == "record_orbit" || ArmCmd->cmd == "play_orbit" || ArmCmd->cmd == "rotate" ||\
-             ArmCmd->cmd == "set_orientation" || ArmCmd->cmd == "set_position" || ArmCmd->cmd == "reset"))
+             ArmCmd->cmd == "set_orientation" || ArmCmd->cmd == "set_yaw_angle" || ArmCmd->cmd == "set_position" || ArmCmd->cmd == "reset"))
     {
         ROS_INFO("[ArmCmdCallBack] robot arm is moving");
         ArmAck.data = "robot arm is moving";
@@ -1621,7 +1663,7 @@ void CEliteControl::ArmCmdCallBack(const wootion_msgs::GeneralCmd::ConstPtr &Arm
 
     if (m_bRecordDragTrack && m_nEliteState != ALARM &&\
             (ArmCmd->cmd == "record_orbit" || ArmCmd->cmd == "play_orbit" || ArmCmd->cmd == "rotate" ||\
-             ArmCmd->cmd == "set_orientation" || ArmCmd->cmd == "set_position" || ArmCmd->cmd == "reset"))
+             ArmCmd->cmd == "set_orientation" || ArmCmd->cmd == "set_yaw_angle" || ArmCmd->cmd == "set_position" || ArmCmd->cmd == "reset"))
     {
         ROS_INFO("[ArmCmdCallBack] robot arm is moving");
         ArmAck.data = "robot arm is moving";
@@ -1662,7 +1704,7 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
     }
 
     if(sCommand == "play_orbit" || sCommand == "rotate" || sCommand == "reset" || sCommand == "set_orientation" \
-        || sCommand == "set_position" || sCommand == "turn_around")
+        || sCommand == "set_yaw_angle" || sCommand == "set_position" || sCommand == "turn_around")
     {
         if(m_nEliteState == STOP)
         {
@@ -1723,6 +1765,14 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
     {
         return Reset(sOutput);
     }
+    else if(sCommand == "get_yaw_angle")
+    {
+        return GetYawAngle(sOutput);
+    }
+    else if(sCommand == "set_yaw_angle")
+    {
+        return SetYawAngle(sInput, sOutput);
+    }
     //机械臂1轴旋转180,镜头朝向相对化工机器人调转180.
     else if(sCommand == "turn_around")
     {
@@ -1732,6 +1782,15 @@ bool CEliteControl::ArmOperation(const std::string &sCommand, const std::string 
     else if (sCommand == "goto")
     {
         return GotoNewPos(sInput, sOutput);
+    }
+    //测试代码，模拟teach功能
+    else if (sCommand == "teach")
+    {
+        return VirtualTeach(sInput, sOutput);
+    }
+    else if(sCommand == "stop_teach")
+    {
+        return StopRotate(sOutput);
     }
     else
     {
@@ -1830,59 +1889,77 @@ Others: void
 **************************************************/
 bool CEliteControl::PlayOrbit(const std::string &sInput, std::string &sOutput)
 {
-    m_bIgnoreMove = true;
-    bool bHasReset = !CheckOrigin(m_EliteCurrentPos);
-    if(!ResetToOrigin(sOutput))
-    {
-        ROS_ERROR("[PlayOrbit]%s",sOutput.c_str());
-        m_bIgnoreMove = false;
-        return false;
-    }
-
-    m_nTaskName = PLAY;
-    if(bHasReset)
-    {
-        this_thread::sleep_for(std::chrono::milliseconds(1000));
-    }
-
-    string sTrackFile, sDirection;
+    string sTrackFile, sPlayFirstAxis;
     vector<string> vCmdList;
     boost::split(vCmdList, sInput, boost::is_any_of(","), boost::token_compress_on);
-
-    if(vCmdList.size() == 1)
-    {
-        sDirection = vCmdList[0];
-        sTrackFile = m_sArmTrackPath + m_sOrbitFileName;
-    }
-    else if(vCmdList.size() == 2)
-    {
-        sTrackFile = vCmdList[0];
-        sDirection = vCmdList[1];
-    }
-    else
+    if(vCmdList.size() != 2)
     {
         sOutput = "input error" + sInput;
         ROS_ERROR("[PlayOrbit]%s",sOutput.c_str());
+        return false;
+    }
+
+    sTrackFile = vCmdList[0];
+    sPlayFirstAxis = vCmdList[1];
+
+    if(sPlayFirstAxis == "0")
+    {
+        int nOrigin = 0;
+        elt_robot_pos CurrentPos;
+        memcpy(CurrentPos, m_EliteCurrentPos, sizeof(CurrentPos));
+        for(int i=1; i<6; i++)
+        {
+            if(abs(CurrentPos[i] - m_EltOriginPos[i]) < 0.1)
+            {
+                nOrigin++;
+            }
+        }
+
+        if(nOrigin != 5)
+        {
+            sOutput = "play orbit excepting 1st axis, the other axis is not at origin";
+            ROS_ERROR("[PlayOrbit]%s",sOutput.c_str());
+            return false;
+        }
+    }
+    else
+    {
+        m_bIgnoreMove = true;
+        bool bHasReset = !CheckOrigin(m_EliteCurrentPos);
+        if(!ResetToOrigin(sOutput))
+        {
+            ROS_ERROR("[PlayOrbit]%s",sOutput.c_str());
+            m_bIgnoreMove = false;
+            return false;
+        }
+
+        m_nTaskName = PLAY;
+        if(bHasReset)
+        {
+            this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+    }
+    
+    m_nTaskName = PLAY;
+
+    if(sTrackFile.empty() || sTrackFile == "null" || sTrackFile == " ")
+    {
+        sTrackFile = m_sArmTrackPath + m_sOrbitFileName;
+    }
+
+    if (access(sTrackFile.c_str(), 0))
+    {
+        sOutput = "orbit file is null";
+        ROS_ERROR("[PlayOrbit]%s", sOutput.c_str());
         m_bIgnoreMove = false;
         return false;
     }
 
-    if(sDirection == "+")
+    if (EliteRunDragTrack(sTrackFile, m_dEltSpeed, FORWARD, sOutput, sPlayFirstAxis) == -1)
     {
-        if (access(sTrackFile.c_str(), 0))
-        {
-            sOutput = "orbit file is null";
-            ROS_ERROR("[PlayOrbit]%s", sOutput.c_str());
-            m_bIgnoreMove = false;
-            return false;
-        }
-
-        if (EliteRunDragTrack(sTrackFile, m_dEltSpeed, FORWARD, sOutput) == -1)
-        {
-            ROS_ERROR("[PlayOrbit]%s", sOutput.c_str());
-            m_bIgnoreMove = false;
-            return false;
-        }
+        ROS_ERROR("[PlayOrbit]%s", sOutput.c_str());
+        m_bIgnoreMove = false;
+        return false;
     }
 
     if(!WaitForMotionStop(m_nTimeoutLen, sOutput))
@@ -1929,6 +2006,15 @@ bool CEliteControl::Rotate(const std::string &sInput, std::string &sOutput)
     sPitchAngle = vCmdList[1];
     sYawAngle = vCmdList[2];
 
+    int nSpeedLevel = stoi(vCmdList[3]);
+
+    if(nSpeedLevel < 1 || nSpeedLevel > 63)
+    {
+        sOutput = "input speed level error" + sInput;
+        ROS_ERROR("[Rotate] %s",sOutput.c_str());
+        return false;
+    }
+
     double dSpeed = (m_dRotateSpeed*stod(vCmdList[3]))/63;
 
     elt_robot_pos targetPos;
@@ -1939,24 +2025,12 @@ bool CEliteControl::Rotate(const std::string &sInput, std::string &sOutput)
         targetPos[AXIS_ROLL] = m_RotateOriginPos[AXIS_ROLL] + m_dRotateLimitAngle;
         if(targetPos[AXIS_ROLL] > AxisLimitAngle[AXIS_SIX_MAX])
             targetPos[AXIS_ROLL] = AxisLimitAngle[AXIS_SIX_MAX];
-        if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
-        {
-            sOutput.append(",roll + failed");
-            ROS_ERROR("[Rotate]%s",sOutput.c_str());
-            return false;
-        }
     }
-    if(sRollAngle == "-")
+    else if(sRollAngle == "-")
     {
         targetPos[AXIS_ROLL] = m_RotateOriginPos[AXIS_ROLL] - m_dRotateLimitAngle;
         if(targetPos[AXIS_ROLL] < AxisLimitAngle[AXIS_SIX_MIN])
             targetPos[AXIS_ROLL] = AxisLimitAngle[AXIS_SIX_MIN];
-        if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
-        {
-            sOutput.append(",roll - failed");
-            ROS_ERROR("[Rotate]%s",sOutput.c_str());
-            return false;
-        }
     }
 
     if(sPitchAngle == "+")
@@ -1964,24 +2038,12 @@ bool CEliteControl::Rotate(const std::string &sInput, std::string &sOutput)
         targetPos[AXIS_PITCH] = m_RotateOriginPos[AXIS_PITCH] + m_dRotateLimitAngle;
         if(targetPos[AXIS_PITCH] > AxisLimitAngle[AXIS_FOUR_MAX])
             targetPos[AXIS_PITCH] = AxisLimitAngle[AXIS_FOUR_MAX];
-        if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
-        {
-            sOutput.append(",tilt + failed");
-            ROS_ERROR("[Rotate]%s",sOutput.c_str());
-            return false;
-        }
     }
-    if(sPitchAngle == "-")
+    else if(sPitchAngle == "-")
     {
         targetPos[AXIS_PITCH] = m_RotateOriginPos[AXIS_PITCH] - m_dRotateLimitAngle;
         if(targetPos[AXIS_PITCH] < AxisLimitAngle[AXIS_FOUR_MIN])
             targetPos[AXIS_PITCH] = AxisLimitAngle[AXIS_FOUR_MIN];
-        if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
-        {
-            sOutput.append(",tilt - failed");
-            ROS_ERROR("[Rotate]%s",sOutput.c_str());
-            return false;
-        }
     }
 
     if(sYawAngle == "-")
@@ -1989,25 +2051,21 @@ bool CEliteControl::Rotate(const std::string &sInput, std::string &sOutput)
         targetPos[AXIS_YAW] = m_RotateOriginPos[AXIS_YAW] + m_dRotateLimitAngle;
         if(targetPos[AXIS_YAW] > AxisLimitAngle[AXIS_FIVE_MAX])
             targetPos[AXIS_YAW] = AxisLimitAngle[AXIS_FIVE_MAX];
-        if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
-        {
-            sOutput.append(",pan + failed");
-            ROS_ERROR("[Rotate]%s",sOutput.c_str());
-            return false;
-        }
     }
-    if(sYawAngle == "+")
+    else if(sYawAngle == "+")
     {
         targetPos[AXIS_YAW] = m_RotateOriginPos[AXIS_YAW] - m_dRotateLimitAngle;
         if(targetPos[AXIS_YAW] < AxisLimitAngle[AXIS_FIVE_MIN])
             targetPos[AXIS_YAW] = AxisLimitAngle[AXIS_FIVE_MIN];
-        if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
-        {
-            sOutput.append(",pan - failed");
-            ROS_ERROR("[Rotate]%s",sOutput.c_str());
-            return false;
-        }
     }
+
+    if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
+    {
+        sOutput.append(",rotate failed");
+        ROS_ERROR("[Rotate]%s",sOutput.c_str());
+        return false;
+    }
+
     m_nTaskName = ROTATE;
 
     return true;
@@ -2025,7 +2083,7 @@ bool CEliteControl::StopRotate(std::string &sOutput)
 {
     if(EliteStop(sOutput) == -1)
     {
-        sOutput.append(",roll - failed");
+        sOutput.append(",stop - failed");
         ROS_ERROR("[StopRotate]%s",sOutput.c_str());
         return false;
     }
@@ -2108,7 +2166,6 @@ bool CEliteControl::SetOrientation(const std::string &sInput, std::string &sOutp
 
     return WaitForMotionStop(m_nTimeoutLen, sOutput);
 }
-
 
 /*************************************************
 Function: CEliteControl::GetPosition
@@ -2260,6 +2317,85 @@ bool CEliteControl::Reset(std::string &sOutput)
 }
 
 /*************************************************
+Function: CEliteControl::GetYawAngle
+Description: 获取机械臂第1个轴的绝对位置角度信息
+Input: std::string &sOutput, 处理结果反馈
+Output: true 成功
+        false 失败
+Others: void
+**************************************************/
+bool CEliteControl::GetYawAngle(std::string &sOutput)
+{
+    sOutput.append(to_string(int(round(m_EliteCurrentPos[0]*100))));
+    return true;
+}
+
+/*************************************************
+Function: CEliteControl::SetYawAngle
+Description: 设置机械臂第1个轴的绝对位置角度信息
+Input: const std::string &sInput, service 或者 topic中的指令对应的data
+       std::string &sOutput, 处理结果反馈
+Output: true 成功
+        false 失败
+Others: void
+**************************************************/
+bool CEliteControl::SetYawAngle(const std::string &sInput, std::string &sOutput)
+{
+    m_bIgnoreMove = true;
+    bool bHasReset = false;
+
+    int nOrigin = 0;
+    elt_robot_pos CurrentPos;
+    memcpy(CurrentPos, m_EliteCurrentPos, sizeof(CurrentPos));
+    for(int i=1; i<6; i++)
+    {
+        if(abs(CurrentPos[i] - m_EltOriginPos[i]) < 0.1)
+        {
+            nOrigin++;
+        }
+    }
+
+    if(nOrigin != 5)
+    {
+        ROS_ERROR("[PlayOrbit] set yaw angle, excepting 1st axis, the other axis is not at origin");
+        if(!ResetToOrigin(sOutput))
+        {
+            ROS_ERROR("[SetYawAngle]%s",sOutput.c_str());
+            m_bIgnoreMove = false;
+            return false;
+        }
+        bHasReset = true;
+    }
+
+    m_nTaskName = SET_ARM_YAW;
+    if(bHasReset)
+    {
+        this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+
+    elt_robot_pos targetPos;
+    memcpy(targetPos, m_EliteCurrentPos, sizeof(targetPos));
+
+    targetPos[0] = stod(sInput)/100;
+
+    if(EliteMultiPointMove(targetPos, m_dEltSpeed, sOutput) == -1)
+    {
+        sOutput.append(", set_yaw_angle failed");
+        ROS_ERROR("[SetYawAngle]%s",sOutput.c_str());
+        return false;
+    }
+
+    if(!WaitForMotionStop(m_nTimeoutLen, sOutput))
+    {
+        m_bIgnoreMove = false;
+        return false;
+    }
+
+    m_bIgnoreMove = false;
+    return true;
+}
+
+/*************************************************
 Function: CEliteControl::TurnAround
 Description: 一轴旋转180度
 Input: std::string &sOutput, 处理结果反馈
@@ -2362,6 +2498,63 @@ bool CEliteControl::GotoNewPos(const std::string &sInput, std::string &sOutput)
     return true;
 }
 
+/*************************************************
+Function: CEliteControl::VirtualTeach
+Description: 模拟teach模式
+Input: const std::string &sInput, service 或者 topic中的指令对应的data
+       std::string &sOutput, 处理结果反馈
+Output: true 成功
+        false 失败
+Others: void
+**************************************************/
+bool CEliteControl::VirtualTeach(const std::string &sInput, std::string &sOutput)
+{
+    vector<string> vCmdList;
+    boost::split(vCmdList, sInput, boost::is_any_of(","), boost::token_compress_on);
+
+    if (vCmdList.size() < 3)
+    {
+        sOutput = "input error" + sInput;
+        ROS_ERROR("[VirtualTeach] %s",sOutput.c_str());
+        return false;
+    }
+
+    int nAxisNum = stoi(vCmdList[0]);
+    std::string sDirection = vCmdList[1];
+    int nSpeedLevel = stoi(vCmdList[2]);
+
+    if(nAxisNum < 1 || nAxisNum > 6)
+    {
+        sOutput = "input axis num error" + sInput;
+        ROS_ERROR("[VirtualTeach] %s",sOutput.c_str());
+        return false;
+    }
+
+    if(nSpeedLevel < 1 || nSpeedLevel > 63)
+    {
+        sOutput = "input speed level error" + sInput;
+        ROS_ERROR("[VirtualTeach] %s",sOutput.c_str());
+        return false;
+    }
+
+    double dSpeed = (m_dEltSpeed*stod(vCmdList[2]))/63;
+
+    elt_robot_pos targetPos;
+    memcpy(targetPos, m_EliteCurrentPos, sizeof(targetPos));
+
+    targetPos[nAxisNum-1] = sDirection == "+" ? AxisLimitAngle[nAxisNum-1] : AxisLimitAngle[nAxisNum-1+6];
+
+    if(EliteJointMove(targetPos, dSpeed, sOutput) == -1)
+    {
+        sOutput.append(",teach - failed");
+        ROS_ERROR("[VirtualTeach]%s",sOutput.c_str());
+        return false;
+    }
+
+    m_nTaskName = TEACH;
+
+    return true;
+}
 
 /*************************************************
 Function: CEliteControl::AgvStatusCallBack

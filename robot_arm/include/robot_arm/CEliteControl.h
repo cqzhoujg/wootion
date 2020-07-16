@@ -59,7 +59,9 @@ typedef enum _tagArmStatus
     RESET = 3,
     ROTATE = 4,
     TURN_AROUND = 5,
-    ERROR = 6,
+    SET_ARM_YAW = 6,
+    TEACH = 7,
+    ERROR = 8,
 }ArmStatus;
 
 const static vector<string> vsArmStatus = {
@@ -69,6 +71,8 @@ const static vector<string> vsArmStatus = {
     "reset",
     "rotate",
     "turn_around",
+    "set_arm_yaw",
+    "teach",
     "error",
 };
 
@@ -155,7 +159,7 @@ public:
     int GetElitePos(elt_robot_pos &pos_array);
     int EliteStop(string &sErr);
     int EliteDrag(int nCmd);
-    int EliteRunDragTrack(const string &sFileName, double dSpeed, int nDirection, string &sErrMsg);
+    int EliteRunDragTrack(const string &sFileName, double dSpeed, int nDirection, string &sErrMsg, string sPlayFirstAxis = "1");
     int EliteSyncMotorStatus(bool bSwitchStatusFirst=true);
     int EliteClearAlarm();
     int EliteOpenServo();
@@ -178,8 +182,11 @@ public:
     bool GetPosition(std::string &sOutput);
     bool SetPosition(const std::string &sInput, std::string &sOutput);
     bool Reset(std::string &sOutput);
+    bool GetYawAngle(std::string &sOutput);
+    bool SetYawAngle(const std::string &sInput, std::string &sOutput);
     bool TurnAround(std::string &sOutput);
     bool GotoNewPos(const std::string &sInput, std::string &sOutput);
+    bool VirtualTeach(const std::string &sInput, std::string &sOutput);
 
 private:
     string m_sNodeName;
@@ -206,6 +213,7 @@ private:
     int m_nTimeoutLen;
     int m_nEliteMode;
     int m_nSmoothnessLevel;
+    int m_nDebugTeach;
 
     bool m_bRecordDragTrack;
     bool m_bBusy;
